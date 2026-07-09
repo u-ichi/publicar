@@ -1,0 +1,33 @@
+# publicar — wrangler.toml テンプレート
+#
+# このファイルを wrangler.toml にコピーして、<...> 部分を自組織の値に置き換えてください。
+# 詳細は docs/setup.md を参照。
+
+name = "publicar"
+main = "src/index.ts"
+compatibility_date = "2026-06-10"
+
+# カスタムドメインを使用する場合はコメントを外して設定
+# [[routes]]
+# pattern = "publicar.your-domain.com"
+
+[vars]
+DEV_MODE = "false"
+GOOGLE_CLIENT_ID = "replace-with-google-oauth-client-id"
+ALLOWED_SIGNUP_DOMAINS = "example.com"
+DEFAULT_VISIBILITY = "domain"
+MAX_UPLOAD_BYTES = "5242880"
+TEAM_DRIVE_ID = "replace-with-shared-drive-id"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "publicar"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "00000000000000000000000000000000"
+
+[[r2_buckets]]
+binding = "CACHE_BUCKET"
+bucket_name = "publicar-cache"

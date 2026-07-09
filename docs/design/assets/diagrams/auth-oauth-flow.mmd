@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant B as Browser
+    participant W as Workers
+    participant G as Google OAuth
+    participant D as D1
+    participant K as KV
+    B->>W: GET /auth/login
+    W->>G: 302 Redirect (scope: openid email profile drive.file)
+    G->>B: ログイン画面
+    B->>G: ログイン + 同意
+    G->>W: callback?code=...
+    W->>G: POST token exchange
+    G->>W: access_token + refresh_token
+    W->>D: upsert user (暗号化トークン)
+    W->>K: session 作成 (TTL: 7日)
+    W->>B: Set-Cookie + 302 → /

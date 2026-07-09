@@ -1,0 +1,38 @@
+{
+  "name": "publicar",
+  "version": "0.1.0",
+  "description": "Publicar - Cloudflare Workers based HTML/ZIP hosting service",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Yuichi Uemura",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/u-ichi/publicar.git"
+  },
+  "homepage": "https://github.com/u-ichi/publicar#readme",
+  "keywords": [
+    "cloudflare-workers",
+    "hono",
+    "html-hosting",
+    "zip-deploy",
+    "oss"
+  ],
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "hono": "^4.12.23"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.13",
+    "@cloudflare/workers-types": "^4.20260606.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.98.0"
+  }
+}

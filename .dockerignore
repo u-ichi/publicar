@@ -1,0 +1,14 @@
+.git
+.wrangler
+.claude
+.agents
+.codex
+backlog
+docs/private
+node_modules
+coverage
+dist
+tmp
+*.log
+.dev.vars
+wrangler.toml

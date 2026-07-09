@@ -1,0 +1,15 @@
+# publicar — ローカル開発用 secret テンプレート
+#
+# このファイルを .dev.vars にコピーして、値を設定してください。
+# .dev.vars は .gitignore に含まれており、リポジトリにはコミットされません。
+# 詳細は docs/setup.md を参照。
+
+DEV_MODE=true
+GOOGLE_CLIENT_ID=replace-with-google-oauth-client-id
+GOOGLE_CLIENT_SECRET=replace-with-google-oauth-client-secret
+TOKEN_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+SESSION_SECRET=replace-with-at-least-32-random-characters
+ALLOWED_SIGNUP_DOMAINS=example.com
+DEFAULT_VISIBILITY=domain
+MAX_UPLOAD_BYTES=5242880
+# TEAM_DRIVE_ID=replace-with-shared-drive-id

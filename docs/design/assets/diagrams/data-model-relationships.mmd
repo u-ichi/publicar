@@ -1,0 +1,14 @@
+erDiagram
+    User ||--o{ ProjectMember : joins
+    User ||--o{ ApiKey : owns
+    Project ||--o{ ProjectMember : has
+    Project ||--o{ File : contains
+    Project ||--o{ ProjectAccess : grants
+    User ||--o{ ProjectAccess : invited
+    ProjectMember {
+        string role
+    }
+    File {
+        string drive_file_id
+        string r2_key
+    }

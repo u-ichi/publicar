@@ -1,0 +1,347 @@
+{
+  "schema_version": "1.0",
+  "document_id": "publicar-redesign-v1",
+  "title": "publicar 再設計: SSSS 相当の OSS AI レポート共有基盤",
+  "generated_at": "2026-06-15T00:00:00Z",
+  "blocks": [
+    {
+      "id": "overview",
+      "type": "callout",
+      "title": "概要",
+      "content": "publicar を Cloudflare Access + R2 の社内 HTML ホスティングから、SSSS (SuperSonic Sharing Service) 相当の「AI 生成レポート共有基盤」に再設計し、OSS として公開する。ストレージを Google Drive に切り替え、柔軟なアクセス制御と AI エージェント連携 API を追加する。",
+      "review_required": false,
+      "heading_level": 2
+    },
+    {
+      "id": "goals",
+      "type": "html",
+      "title": "ゴール",
+      "content": "<p>publicar の再設計で達成する 4 つの目標を定義する。</p>\n<ul>\n<li><strong>セルフホスト可能</strong>: 誰でも <code>wrangler deploy</code> 一つで自分の publicar インスタンスを立てられる</li>\n<li><strong>AI エージェント連携</strong>: Claude Code, ChatGPT 等が <code>/llms.txt</code> で API を自己発見し、HTML/ZIP をアップロードして共有 URL を取得できる</li>\n<li><strong>Google Drive 保存</strong>: アップロードしたファイルはユーザー自身の Google Drive に保存され、publicar 側は配信キャッシュ (R2) のみ保持する</li>\n<li><strong>柔軟なアクセス制御</strong>: ページごとに公開範囲 (private / invite / domain / link / public) を設定できる</li>\n</ul>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "design-decisions",
+      "type": "html",
+      "title": "設計方針（決定済み）",
+      "content": "<p>以下の技術選定は確定済みであり、各フェーズの実装はこれらの方針に従う。</p>\n<table>\n<thead><tr><th>項目</th><th>決定</th><th>理由</th></tr></thead>\n<tbody>\n<tr><td>ストレージ</td><td>Google Drive（管理元）+ R2（配信キャッシュ）</td><td>ユーザーがファイル所有権を持ち、Drive 権限取消で即停止。R2 でエッジ配信の低レイテンシ維持</td></tr>\n<tr><td>閲覧者認証</td><td>Google OAuth</td><td>Drive 連携に Google OAuth が必然。visibility に応じて email / ドメインでアクセス判定</td></tr>\n<tr><td>API 認証</td><td>API キー (<code>pub_...</code>)</td><td>AI エージェント等がステートレスに操作可能。セッション不要</td></tr>\n<tr><td>実行環境</td><td>Cloudflare Workers 固定</td><td>Hono + Workers のまま。<code>wrangler deploy</code> で簡単にデプロイ可能</td></tr>\n<tr><td>メタデータ</td><td>D1 (SQLite)</td><td>SQL クエリ対応。スキーマ定義・マイグレーションが標準的。無料枠 5GB</td></tr>\n<tr><td>セッション</td><td>KV</td><td>低レイテンシ (1-10ms)。TTL による自動削除</td></tr>\n<tr><td>公開形態</td><td>OSS (GitHub public repo)</td><td>SSSS の代替としてコミュニティ利用を想定</td></tr>\n<tr><td>テナントモデル</td><td>シングルテナント</td><td>組織モード: 1 インスタンス = 1 組織（Shared Drive が 1 つのため）。個人モード: 1 インスタンスを複数ユーザーで共有可能（各自の Drive を使用）。組織をまたぐマルチテナントには非対応</td></tr>\n</tbody>\n</table>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "architecture-diagram",
+      "type": "diagram",
+      "title": "アーキテクチャ概要",
+      "diagram_source": "graph TB\n    subgraph Clients\n        Browser[Browser / AI Agent]\n    end\n    subgraph Google\n        OAuth[Google OAuth 2.0]\n        Drive[Google Drive API v3]\n    end\n    subgraph CF[Cloudflare Workers]\n        Hono[Hono Router]\n    end\n    subgraph Storage\n        R2[R2 Cache]\n        D1[D1 SQLite]\n        KV[KV Sessions]\n    end\n    Browser -->|request| Hono\n    Hono -->|auth| OAuth\n    Hono -->|read/write| Drive\n    Hono -->|cache| R2\n    Hono -->|metadata| D1\n    Hono -->|session| KV\n    Hono -->|response| Browser",
+      "content": "",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "data-flow-upload",
+      "type": "html",
+      "title": "データフロー: アップロード",
+      "content": "<ol>\n<li>認証（セッション Cookie or API キー <code>Bearer pub_...</code>）</li>\n<li>ファイルを Google Drive（ユーザーの「publicar」フォルダ）に保存</li>\n<li>同じファイルを R2 にキャッシュとして書き込み</li>\n<li>D1 にメタデータ（alias, visibility, drive_file_id, r2_key 等）を記録</li>\n<li><code>{alias, url}</code> を返却</li>\n</ol>",
+      "review_required": false,
+      "heading_level": 3
+    },
+    {
+      "id": "data-flow-serve",
+      "type": "html",
+      "title": "データフロー: 配信",
+      "content": "<ol>\n<li>alias から D1 でプロジェクト取得 → visibility チェック</li>\n<li>R2 キャッシュ確認 → ヒットなら即配信</li>\n<li>ミスなら → オーナーの OAuth トークンで Drive API から取得 → R2 にキャッシュ → 配信</li>\n<li>Drive API が 403/404 → R2 キャッシュ削除 + 404 返却（権限取消対応）</li>\n</ol>",
+      "review_required": false,
+      "heading_level": 3
+    },
+    {
+      "id": "data-model-overview",
+      "type": "html",
+      "title": "データモデル概要",
+      "heading_level": 2,
+      "content": "<p>publicar が扱う主要な概念と、それらの関係を定義する。</p>\n<p><strong>前提:</strong> 組織モード（<code>TEAM_DRIVE_ID</code> 設定時）では <strong>1 インスタンス = 1 組織</strong>。Shared Drive が 1 つに固定されるため、複数組織の混在はできない。個人モード（<code>TEAM_DRIVE_ID</code> 未設定）では <strong>1 インスタンスを複数ユーザーで共有可能</strong>。各ユーザーが自分の Drive にファイルを保存するため、互いに干渉しない。</p>",
+      "review_required": true
+    },
+    {
+      "id": "data-model-entities",
+      "type": "html",
+      "title": "エンティティ定義",
+      "heading_level": 3,
+      "content": "<table>\n<thead><tr><th>概念</th><th>定義</th><th>ライフサイクル</th></tr></thead>\n<tbody>\n<tr><td><strong>User</strong></td><td>Google OAuth でログインしたアカウント。email で一意に識別される。</td><td>初回ログイン時に自動作成（登録制御の条件を満たす場合のみ）。</td></tr>\n<tr><td><strong>Project</strong></td><td>1 つの公開 URL (<code>/p/:alias</code>) に対応するファイル群の単位。title, alias, visibility, entry_path を持つ。alias は URL 用識別子で、title から自動決定されるかユーザーが明示指定する。</td><td><code>POST /api/v1/deploy</code> で新規作成。同じ alias への再 deploy で上書き更新。<code>DELETE /api/v1/projects/:id</code> で削除。</td></tr>\n<tr><td><strong>ProjectMember</strong></td><td>Project と User の関連。role（owner / editor / viewer）を持つ。1 Project に複数の owner を設定可能。</td><td>Project 作成時に作成者を owner として自動登録。owner がメンバー追加・削除・role 変更できる。</td></tr>\n<tr><td><strong>File</strong></td><td>Project に属する個別ファイル（HTML, CSS, JS, 画像等）。project_id + path で一意。</td><td>deploy 時に作成・上書き。Project 削除時に CASCADE 削除。</td></tr>\n<tr><td><strong>ProjectAccess</strong></td><td>visibility が invite の Project に対するメール単位の閲覧許可。未登録ユーザーへの招待にも使える。</td><td>owner が追加・削除。Project 削除時に CASCADE 削除。</td></tr>\n<tr><td><strong>API Key</strong></td><td>User に紐づく認証トークン。AI エージェント等がセッションなしで API を呼ぶために使う。</td><td>User が発行・削除。</td></tr>\n</tbody>\n</table>\n\n<h4>アカウント登録制御</h4>\n<p>誰がインスタンスにアカウントを作成できるかは、環境変数の組み合わせで決まる。</p>\n<table>\n<thead><tr><th>環境変数</th><th>登録できるユーザー</th><th>想定用途</th></tr></thead>\n<tbody>\n<tr><td>どちらも未設定</td><td>最初にログインした 1 人のみ（以降は招待制）</td><td>個人利用</td></tr>\n<tr><td><code>ALLOWED_SIGNUP_DOMAINS</code> のみ</td><td>指定ドメインのメールアドレスを持つユーザー</td><td>組織利用（Shared Drive なし）</td></tr>\n<tr><td><code>TEAM_DRIVE_ID</code> + <code>ALLOWED_SIGNUP_DOMAINS</code></td><td>指定ドメインのユーザー + Shared Drive にファイル集約</td><td>組織利用（推奨構成）</td></tr>\n<tr><td><code>ALLOW_PUBLIC_SIGNUP=true</code></td><td>Google アカウントを持つ全員</td><td>公開サービスとして運用</td></tr>\n</tbody>\n</table>\n<p><strong>招待制の仕組み:</strong> 既存ユーザー（owner ロール）が <code>POST /api/v1/invites</code> でメールアドレスを指定して招待。招待されたユーザーは Google OAuth ログイン時に自動登録される。招待なしのログインは 403。</p>\n<h4>閲覧権限と編集権限</h4>\n<p>publicar では<strong>閲覧権限</strong>と<strong>編集権限</strong>を別の仕組みで管理する。</p>\n<table>\n<thead><tr><th></th><th>制御する仕組み</th><th>対象</th></tr></thead>\n<tbody>\n<tr><td><strong>閲覧</strong></td><td><code>visibility</code>（projects テーブル）</td><td>コンテンツを <code>/p/:alias</code> で見られるか</td></tr>\n<tr><td><strong>編集</strong></td><td><code>project_members</code> テーブル</td><td>ファイルの deploy・上書き・プロジェクト設定変更ができるか</td></tr>\n</tbody>\n</table>\n<p><strong>例（組織モード、visibility: domain）:</strong></p>\n<ul>\n<li>同一ドメインの全員 → 閲覧可能（member でなくても見える）</li>\n<li>project_members に登録された owner / editor → 編集・deploy 可能</li>\n<li>project_members の viewer → visibility に関係なく閲覧可能（invite や private でも見える）</li>\n</ul>\n<h4>運用モード</h4>\n<p>publicar は <strong>組織モード</strong> と <strong>個人モード</strong> の 2 つの運用形態をサポートする。環境変数 <code>TEAM_DRIVE_ID</code> の有無で切り替わる。</p>\n<table>\n<thead><tr><th></th><th>組織モード (<code>TEAM_DRIVE_ID</code> 設定あり)</th><th>個人モード (<code>TEAM_DRIVE_ID</code> 未設定)</th></tr></thead>\n<tbody>\n<tr><td><strong>ストレージ</strong></td><td>組織の Google Shared Drive (Team Drive) に全ファイルを保存</td><td>deploy した User の個人 Drive (マイドライブ) に保存</td></tr>\n<tr><td><strong>ファイルの所有</strong></td><td>Shared Drive が所有。個人に紐づかない</td><td>deploy した User が所有</td></tr>\n<tr><td><strong>引き継ぎ・修正</strong></td><td>同じ Shared Drive にアクセスできるメンバーなら誰でも上書き・削除可能</td><td>owner / editor のみ操作可能。Drive トークンは deploy した User のものが必要</td></tr>\n<tr><td><strong>退職・異動時</strong></td><td>ファイルは Shared Drive に残る。User を削除しても影響なし</td><td>User の Drive アカウントが無効化されると配信停止</td></tr>\n<tr><td><strong>認証制限</strong></td><td><code>ALLOWED_SIGNUP_DOMAINS</code> との併用を推奨</td><td>任意</td></tr>\n</tbody>\n</table>\n\n<h4>マルチオーナーモデル</h4>\n<p><code>project_members</code> テーブルで Project ごとの権限を管理する。組織モードでは Drive 操作の権限は Shared Drive のメンバーシップで決まるため、<code>project_members</code> は publicar アプリ内の権限制御に使う。</p>\n<table>\n<thead><tr><th>role</th><th>できること</th></tr></thead>\n<tbody>\n<tr><td><strong>owner</strong></td><td>プロジェクト設定変更、メンバー追加・削除・role 変更、ファイルアップロード、プロジェクト削除</td></tr>\n<tr><td><strong>editor</strong></td><td>ファイルアップロード・上書き（deploy 含む）。設定・メンバー管理は不可</td></tr>\n<tr><td><strong>viewer</strong></td><td>visibility に関係なく閲覧可能（ProjectAccess の上位互換）</td></tr>\n</tbody>\n</table>",
+      "review_required": true
+    },
+    {
+      "id": "data-model-relationships",
+      "type": "diagram",
+      "title": "エンティティ関係図",
+      "heading_level": 3,
+      "diagram_source": "erDiagram\n    User ||--o{ ProjectMember : joins\n    User ||--o{ ApiKey : owns\n    Project ||--o{ ProjectMember : has\n    Project ||--o{ File : contains\n    Project ||--o{ ProjectAccess : grants\n    User ||--o{ ProjectAccess : invited\n    ProjectMember {\n        string role\n    }\n    File {\n        string drive_file_id\n        string r2_key\n    }",
+      "content": "",
+      "review_required": false
+    },
+    {
+      "id": "data-model-deploy",
+      "type": "html",
+      "title": "deploy の動作",
+      "heading_level": 3,
+      "content": "<p><code>POST /api/v1/projects/:id/deploy</code> は既存プロジェクトへのファイルアップロード専用。プロジェクト作成は <code>POST /api/v1/projects</code> で行う。</p>\n<table>\n<thead><tr><th>条件</th><th>動作</th></tr></thead>\n<tbody>\n<tr><td>プロジェクトが存在 + 実行者が owner/editor</td><td>ファイルをアップロード（上書き更新）</td></tr>\n<tr><td>プロジェクトが存在 + 権限なし</td><td>403 Forbidden</td></tr>\n<tr><td>プロジェクトが存在しない</td><td>404 Not Found</td></tr>\n</tbody>\n</table>\n<p><strong>上書き時の挙動:</strong> 新しいファイルで既存ファイルを置換する。ZIP deploy の場合、ZIP に含まれないファイルは削除される（クリーンデプロイ）。</p>\n<h4>Drive 保存先の決定</h4>\n<table>\n<thead><tr><th>モード</th><th>保存先</th><th>使用するトークン</th></tr></thead>\n<tbody>\n<tr><td>組織モード</td><td><code>TEAM_DRIVE_ID</code> の Shared Drive 内の <code>publicar/:alias/</code></td><td>deploy 実行者の OAuth トークン</td></tr>\n<tr><td>個人モード</td><td>deploy 実行者のマイドライブ内の <code>publicar/:alias/</code></td><td>同上</td></tr>\n</tbody>\n</table>",
+      "review_required": true
+    },
+    {
+      "id": "d1-schema",
+      "type": "html",
+      "title": "D1 スキーマ",
+      "content": "<p>D1 (SQLite) で管理する 7 つのテーブルの概要を示す。SQL 定義は次節を参照。</p>\n<table>\n<thead><tr><th>テーブル</th><th>用途</th><th>主要カラム</th></tr></thead>\n<tbody>\n<tr><td><code>users</code></td><td>Google OAuth ユーザー</td><td>id, google_id, email, name, encrypted_access_token, encrypted_refresh_token, token_expires_at, drive_folder_id</td></tr>\n<tr><td><code>projects</code></td><td>公開プロジェクト</td><td>id, alias, title, description, created_by, visibility, allowed_domains, allowed_groups, entry_path</td></tr>\n<tr><td><code>project_members</code></td><td>プロジェクトメンバー</td><td>id, project_id, user_id, role (owner/editor/viewer)</td></tr>\n<tr><td><code>project_files</code></td><td>プロジェクト内ファイル</td><td>id, project_id, path, drive_file_id, r2_key, size_bytes, content_hash</td></tr>\n<tr><td><code>project_access</code></td><td>invite アクセスリスト</td><td>id, project_id, email, granted_by</td></tr>\n<tr><td><code>api_keys</code></td><td>AI エージェント用 API キー</td><td>id, user_id, name, key_prefix, key_hash, scopes, expires_at</td></tr>\n<tr><td><code>invites</code></td><td>ユーザー招待</td><td>id, email, invited_by, used_at, expires_at</td></tr>\n</tbody>\n</table>\n<p><strong>補足:</strong> 組織モードでは Drive のファイル所有が Shared Drive に帰属するため、<code>project_files.uploaded_by</code> は不要（配信時に任意のメンバーのトークンで取得可能）。個人モードでは <code>created_by</code> のトークンを使う。</p>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "d1-schema-sql",
+      "type": "html",
+      "title": "D1 スキーマ: SQL 定義",
+      "content": "<pre><code>CREATE TABLE users (\n  id TEXT PRIMARY KEY,\n  google_id TEXT NOT NULL UNIQUE,\n  email TEXT NOT NULL UNIQUE,\n  name TEXT,\n  avatar_url TEXT,\n  encrypted_access_token TEXT,\n  encrypted_refresh_token TEXT,\n  token_expires_at INTEGER,\n  drive_folder_id TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n);\n\nCREATE TABLE projects (\n  id TEXT PRIMARY KEY,\n  alias TEXT NOT NULL UNIQUE,\n  title TEXT NOT NULL,\n  description TEXT,\n  created_by TEXT NOT NULL REFERENCES users(id),\n  visibility TEXT NOT NULL DEFAULT 'private'\n    CHECK (visibility IN ('private','invite','domain','group','link','public')),\n  allowed_domains TEXT DEFAULT '[]',\n  allowed_groups TEXT DEFAULT '[]',\n  entry_path TEXT DEFAULT 'index.html',\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n);\n\nCREATE TABLE project_members (\n  id TEXT PRIMARY KEY,\n  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,\n  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n  role TEXT NOT NULL DEFAULT 'viewer'\n    CHECK (role IN ('owner','editor','viewer')),\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  UNIQUE (project_id, user_id)\n);\n\nCREATE TABLE project_files (\n  id TEXT PRIMARY KEY,\n  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,\n  path TEXT NOT NULL,\n  drive_file_id TEXT,\n  r2_key TEXT NOT NULL,\n  size_bytes INTEGER,\n  content_hash TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n  UNIQUE (project_id, path)\n);\n\nCREATE TABLE project_access (\n  id TEXT PRIMARY KEY,\n  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,\n  email TEXT NOT NULL,\n  granted_by TEXT NOT NULL REFERENCES users(id),\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  UNIQUE (project_id, email)\n);\n\nCREATE TABLE api_keys (\n  id TEXT PRIMARY KEY,\n  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n  name TEXT NOT NULL,\n  key_prefix TEXT NOT NULL,\n  key_hash TEXT NOT NULL UNIQUE,\n  scopes TEXT NOT NULL DEFAULT '[\"read\",\"write\",\"deploy\"]',\n  last_used_at TEXT,\n  expires_at TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n);\nCREATE TABLE invites (\n  id TEXT PRIMARY KEY,\n  email TEXT NOT NULL,\n  invited_by TEXT NOT NULL REFERENCES users(id),\n  used_at TEXT,\n  expires_at TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  UNIQUE (email)\n);</code></pre>",
+      "review_required": true,
+      "heading_level": 3
+    },
+    {
+      "id": "auth-oauth-flow",
+      "type": "diagram",
+      "title": "認証設計: Google OAuth フロー",
+      "diagram_source": "sequenceDiagram\n    participant B as Browser\n    participant W as Workers\n    participant G as Google OAuth\n    participant D as D1\n    participant K as KV\n    B->>W: GET /auth/login\n    W->>G: 302 Redirect (scope: openid email profile drive.file)\n    G->>B: ログイン画面\n    B->>G: ログイン + 同意\n    G->>W: callback?code=...\n    W->>G: POST token exchange\n    G->>W: access_token + refresh_token\n    W->>D: upsert user (暗号化トークン)\n    W->>K: session 作成 (TTL: 7日)\n    W->>B: Set-Cookie + 302 → /",
+      "content": "<ul>\n<li><strong>OAuth スコープ</strong>: <code>openid email profile drive.file</code></li>\n<li><code>drive.file</code> = アプリが作成したファイルのみアクセス（ユーザーの Drive 全体にはアクセスしない）</li>\n<li><code>access_type=offline</code> + <code>prompt=consent</code> で refresh_token を取得</li>\n</ul>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "auth-api-key",
+      "type": "html",
+      "title": "認証設計: API キー",
+      "content": "<table>\n<thead><tr><th>項目</th><th>仕様</th></tr></thead>\n<tbody>\n<tr><td>形式</td><td><code>pub_&lt;base62(32bytes)&gt;</code> (約 43 文字)</td></tr>\n<tr><td>保存</td><td>SHA-256 ハッシュのみ D1 に保存。平文は発行時の一度だけ返却</td></tr>\n<tr><td>検証</td><td><code>Authorization: Bearer pub_...</code> → SHA-256 → D1 lookup</td></tr>\n<tr><td>スコープ</td><td><code>read</code> / <code>write</code> / <code>deploy</code></td></tr>\n</tbody>\n</table>",
+      "review_required": true,
+      "heading_level": 3
+    },
+    {
+      "id": "auth-middleware",
+      "type": "html",
+      "title": "認証設計: 統合認証ミドルウェア",
+      "content": "<pre><code>リクエスト受信\n  → Bearer pub_... ? → API キー検証 → user_id 解決\n  → publicar_session cookie ? → KV セッション取得 → user_id 解決\n  → どちらもない → 401 (API) or 302 /auth/login (ブラウザ)</code></pre>",
+      "review_required": false,
+      "heading_level": 3
+    },
+    {
+      "id": "auth-security",
+      "type": "callout",
+      "title": "セキュリティ: トークン暗号化",
+      "content": "OAuth トークンは crypto.subtle の AES-256-GCM で暗号化して D1 に保存。暗号化キーは環境変数 TOKEN_ENCRYPTION_KEY (wrangler secret)。IV は毎回ランダム生成し暗号文の先頭 12 bytes に付加。",
+      "review_required": true,
+      "heading_level": 3
+    },
+    {
+      "id": "api-deploy",
+      "type": "html",
+      "title": "API 設計: デプロイ（ファイルアップロード）",
+      "content": "<p>既存プロジェクトに対してファイルをアップロードする。プロジェクトは事前に <code>POST /api/v1/projects</code> で作成しておく。</p>\n<table>\n<thead><tr><th>メソッド</th><th>パス</th><th>Content-Type</th><th>パラメータ</th><th>レスポンス</th></tr></thead>\n<tbody>\n<tr><td><code>POST</code></td><td><code>/api/v1/projects/:id/deploy?path=index.html</code></td><td><code>application/octet-stream</code></td><td>body = ファイルバイナリ</td><td><code>{ok, url}</code></td></tr>\n<tr><td><code>POST</code></td><td><code>/api/v1/projects/:id/deploy?name=site.zip</code></td><td><code>application/octet-stream</code></td><td>body = ZIP バイナリ</td><td><code>{ok, files, entry, url}</code></td></tr>\n</tbody>\n</table>\n<p><strong>ZIP と単一ファイルを分ける理由:</strong> 単一 HTML は AI エージェントがレポート 1 枚を即共有する最もシンプルなケース。ZIP は CSS/JS/画像を含むマルチファイルサイト用で、サーバー側で <code>fflate</code> により展開して全ファイルを配置する。</p>\n<p><strong>entry_path の決定ロジック（ZIP deploy 時）:</strong></p>\n<ol>\n<li>ZIP 内に <code>index.html</code> があればそれを <code>entry_path</code> に設定</li>\n<li>なければ、ZIP ルートの <code>.html</code> ファイルが 1 つだけならそれを採用</li>\n<li>複数あれば最初の <code>.html</code> を採用。<code>entry_path</code> は <code>PATCH /api/v1/projects/:id</code> で後から変更可能</li>\n</ol>\n<p><strong>上書き時の挙動:</strong> 新しいファイルで既存ファイルを置換する。ZIP deploy の場合、ZIP に含まれないファイルは削除される（クリーンデプロイ）。</p>\n<p><strong>使用例（AI エージェントの典型的なフロー）:</strong></p>\n<pre><code># 1. プロジェクト作成\ncurl -X POST \"$BASE/api/v1/projects\" \\\n  -H \"Authorization: Bearer $KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"title\": \"月次レポート\", \"visibility\": \"domain\"}'\n# → {\"ok\":true, \"id\":\"proj_xxx\", \"alias\":\"monthly-report\"}\n\n# 2. ファイルをデプロイ\ncurl -X POST \"$BASE/api/v1/projects/proj_xxx/deploy?path=index.html\" \\\n  -H \"Authorization: Bearer $KEY\" \\\n  --data-binary @report.html\n# → {\"ok\":true, \"url\":\"https://publicar.example.com/p/monthly-report\"}\n\n# 同じプロジェクトへの再デプロイ（上書き更新）\ncurl -X POST \"$BASE/api/v1/projects/proj_xxx/deploy?name=report.zip\" \\\n  -H \"Authorization: Bearer $KEY\" \\\n  --data-binary @report.zip\n# → {\"ok\":true, \"files\":5, \"entry\":\"index.html\", \"url\":\"https://publicar.example.com/p/monthly-report\"}</code></pre>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "api-projects",
+      "type": "html",
+      "title": "API 設計: プロジェクト管理",
+      "content": "<table>\n<thead><tr><th>メソッド</th><th>パス</th><th>説明</th></tr></thead>\n<tbody>\n<tr><td><code>GET</code></td><td><code>/api/v1/projects[?q=term]</code></td><td>プロジェクト一覧・検索</td></tr>\n<tr><td><code>POST</code></td><td><code>/api/v1/projects</code></td><td>プロジェクト作成（title 必須、alias / visibility / allowed_domains は任意）</td></tr>\n<tr><td><code>GET</code></td><td><code>/api/v1/projects/:id</code></td><td>プロジェクト詳細取得</td></tr>\n<tr><td><code>PATCH</code></td><td><code>/api/v1/projects/:id</code></td><td>プロジェクト更新（title, visibility, allowed_domains, entry_path）</td></tr>\n<tr><td><code>DELETE</code></td><td><code>/api/v1/projects/:id</code></td><td>プロジェクト削除（Drive + R2 + D1 から削除）</td></tr>\n<tr><td><code>POST</code></td><td><code>/api/v1/projects/:id/deploy</code></td><td>ファイルデプロイ（単一ファイル or ZIP）</td></tr>\n<tr><td><code>PUT</code></td><td><code>/api/v1/projects/:id/files?path=...</code></td><td>個別ファイル書き込み/上書き</td></tr>\n<tr><td><code>DELETE</code></td><td><code>/api/v1/projects/:id/files?path=...</code></td><td>個別ファイル削除</td></tr>\n</tbody>\n</table>\n<p><strong>プロジェクト作成時のレスポンス:</strong></p>\n<pre><code>{\"ok\": true, \"id\": \"proj_xxx\", \"alias\": \"monthly-report\", \"url\": \"https://.../p/monthly-report\"}</code></pre>\n<p><strong>alias の決定ロジック:</strong></p>\n<ol>\n<li>alias を明示指定 → その値を使用</li>\n<li>alias 未指定 + title が ASCII のみ（英数字・ハイフン・アンダースコア） → title を小文字化・スペースをハイフンに変換して alias にする（例: <code>Monthly Report</code> → <code>monthly-report</code>）</li>\n<li>alias 未指定 + title に日本語等の非 ASCII 文字を含む → ランダム alias を自動生成（例: <code>rpt-a3f8k2</code>）</li>\n</ol>\n<p>alias は <code>[a-z0-9][a-z0-9-]*</code> の形式に制限。重複時はサフィックス（<code>-2</code>, <code>-3</code>）を付与。作成者は自動的に owner として <code>project_members</code> に登録される。</p>",
+      "review_required": true,
+      "heading_level": 3
+    },
+    {
+      "id": "api-keys-ai",
+      "type": "html",
+      "title": "API 設計: API キー管理 / AI エージェント連携 / 配信",
+      "content": "<p><strong>API キー管理:</strong></p>\n<table>\n<thead><tr><th>メソッド</th><th>パス</th><th>説明</th></tr></thead>\n<tbody>\n<tr><td><code>GET</code></td><td><code>/api/v1/api-keys</code></td><td>一覧</td></tr>\n<tr><td><code>POST</code></td><td><code>/api/v1/api-keys</code></td><td>発行</td></tr>\n<tr><td><code>DELETE</code></td><td><code>/api/v1/api-keys/:id</code></td><td>削除</td></tr>\n</tbody>\n</table>\n<p><strong>AI エージェント連携（認証不要）:</strong></p>\n<table>\n<thead><tr><th>メソッド</th><th>パス</th><th>説明</th></tr></thead>\n<tbody>\n<tr><td><code>GET</code></td><td><code>/llms.txt</code></td><td>LLM 向けサービス説明 + API 概要</td></tr>\n<tr><td><code>GET</code></td><td><code>/api/v1/openapi.json</code></td><td>OpenAPI 3.1 仕様</td></tr>\n</tbody>\n</table>\n<p><strong>配信:</strong></p>\n<table>\n<thead><tr><th>メソッド</th><th>パス</th><th>説明</th></tr></thead>\n<tbody>\n<tr><td><code>GET</code></td><td><code>/p/:alias</code></td><td>index.html 配信（visibility に応じた認証）</td></tr>\n<tr><td><code>GET</code></td><td><code>/p/:alias/*</code></td><td>アセット配信（CSS, JS, 画像等）</td></tr>\n</tbody>\n</table>",
+      "review_required": false,
+      "heading_level": 3
+    },
+    {
+      "id": "owner-model",
+      "type": "html",
+      "title": "アクセス制御: オーナー・メンバー権限",
+      "heading_level": 2,
+      "content": "<p>Google OAuth でログインし、コンテンツをアップロード・管理する側の権限モデル。</p>\n<h4>組織での利用</h4>\n<p>組織で publicar を運用する場合、以下の 3 つの環境変数を設定する。</p>\n<table>\n<thead><tr><th>環境変数</th><th>役割</th><th>例</th></tr></thead>\n<tbody>\n<tr><td><code>ALLOWED_SIGNUP_DOMAINS</code></td><td>ログイン可能なメールドメインを制限</td><td><code>example.com,example.co.jp</code></td></tr>\n<tr><td><code>TEAM_DRIVE_ID</code></td><td>ファイル保存先の Shared Drive ID</td><td><code>0ABcDeFgHiJkLmN</code></td></tr>\n<tr><td><code>DEFAULT_VISIBILITY</code></td><td>新規プロジェクトのデフォルト公開範囲</td><td><code>domain</code>（組織内公開）</td></tr>\n</tbody>\n</table>\n<p>この組み合わせにより:</p>\n<ul>\n<li>組織ドメインのユーザーのみログイン可能</li>\n<li>アップロードしたファイルは組織の Shared Drive に集約</li>\n<li>デフォルトで同じドメインのユーザーが閲覧可能</li>\n<li>他のメンバーがアップロードしたファイルも引き継ぎ・修正可能（Shared Drive の特性）</li>\n</ul>\n<h4>個人での利用</h4>\n<p>上記の環境変数を設定しなければ個人モードで動作する。</p>\n<ul>\n<li>最初にログインしたユーザーのみ自動登録。以降は招待制</li>\n<li>ファイルは各ユーザーの個人 Drive に保存</li>\n<li>新規プロジェクトは <code>private</code>（自分だけ閲覧可能）</li>\n</ul>\n<h4>Shared Drive の前提条件</h4>\n<ul>\n<li>Google Workspace の Shared Drive 機能が有効であること（個人 Google アカウントでは利用不可）</li>\n<li>publicar を利用するユーザーが Shared Drive のメンバーであること</li>\n<li>OAuth スコープ <code>drive.file</code> で、アプリが作成したファイルへのアクセスが可能</li>\n</ul>",
+      "review_required": true
+    },
+    {
+      "id": "visibility-model",
+      "type": "html",
+      "title": "アクセス制御 (b): 閲覧者の Visibility モデル",
+      "content": "<p>閲覧者（コンテンツを見る側）のアクセス制御。プロジェクトごとに設定する。</p>\n<table>\n<thead><tr><th>visibility</th><th>閲覧条件</th><th>認証</th></tr></thead>\n<tbody>\n<tr><td><code>private</code></td><td>オーナー本人のみ</td><td>必須（セッション or API キー）</td></tr>\n<tr><td><code>invite</code></td><td><code>project_access</code> に email 登録済みユーザー</td><td>必須（Google ログインで email 確認）</td></tr>\n<tr><td><code>domain</code></td><td><code>allowed_domains</code> に email ドメインが一致</td><td>必須（Google ログインでドメイン確認）</td></tr>\n<tr><td><code>link</code></td><td>URL を知っていれば誰でも</td><td>不要（noindex 付与）</td></tr>\n<tr><td><code>public</code></td><td>完全公開</td><td>不要</td></tr>\n<tr><td><code>group</code>（バックログ）</td><td>Google Group のメンバーのみ閲覧可能。<code>allowed_groups</code> に Google Group メールアドレスを指定</td><td>必須（Google ログイン + Groups API）</td></tr>\n</tbody>\n</table>\n<p><strong>バックログ: Google Group 対応</strong></p>\n<p><code>visibility: group</code> は初期実装には含めない。ただし以下の設計上の考慮を入れておく:</p>\n<ul>\n<li>D1 スキーマ: <code>projects.allowed_groups</code> カラム（JSON 配列）を初期マイグレーションに含める（空配列のまま未使用）</li>\n<li>visibility の CHECK 制約に <code>group</code> を含めておく</li>\n<li>UI: visibility セレクトボックスに <code>group</code> を disabled 状態で表示（「近日対応」のラベル付き）</li>\n<li>実装時に必要: Cloud Identity Groups API or Directory API、追加 OAuth スコープ、グループメンバーシップのキャッシュ層</li>\n</ul>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "file-structure",
+      "type": "html",
+      "title": "ファイル構成",
+      "content": "<p>再設計後のソースコード構成を示す。既存コードからの完全書き換えとなる。</p>\n<pre><code>src/\n  index.ts                         ルーター定義\n  types.ts                         共通型定義\n  env.ts                           Env binding 型\n\n  auth/\n    oauth.ts                       Google OAuth (login, callback, logout)\n    session.ts                     KV セッション管理\n\n  middleware/\n    auth.ts                        統合認証 (session or API key)\n    require-owner.ts               オーナー権限チェック\n\n  routes/\n    api-v1/\n      index.ts                     /api/v1 ルーターまとめ\n      projects.ts                  プロジェクト CRUD\n      deploy.ts                    ワンショットデプロイ + ZIP\n      files.ts                     ファイル書き込み/削除\n      api-keys.ts                  API キー管理\n      openapi.ts                   OpenAPI 仕様\n    api-legacy.ts                  旧 /api/pages（後方互換）\n    serve.ts                       GET /p/:alias/* 配信\n    wellknown.ts                   /llms.txt, /health\n\n  storage/\n    drive.ts                       Google Drive API クライアント\n    r2.ts                          R2 キャッシュ操作\n    cache.ts                       Drive + R2 統合キャッシュ戦略\n\n  db/\n    users.ts, projects.ts, project-files.ts,\n    project-access.ts, api-keys.ts\n\n  lib/\n    crypto.ts                      AES-GCM 暗号化/復号\n    token-refresh.ts               OAuth token 自動更新\n    zip.ts                         ZIP 展開 (fflate)\n    id.ts                          UUID/API キー生成\n\nmigrations/\n  0001_init.sql                    D1 初期スキーマ\n\ndocs/\n  setup.md                         OSS セットアップガイド\n  google-oauth-setup.md            Google Cloud Console 設定手順</code></pre>",
+      "review_required": false,
+      "heading_level": 2
+    },
+    {
+      "id": "migration-plan",
+      "type": "html",
+      "title": "移行方針",
+      "content": "<p>既存の publicar（Cloudflare Access + R2）は<strong>クリーンに作り直す</strong>。既存の R2 ページデータは破棄する。</p>\n<table>\n<thead><tr><th>リソース</th><th>方針</th></tr></thead>\n<tbody>\n<tr><td>Workers コード</td><td>全面書き換え（Hono のルーター構造は維持）</td></tr>\n<tr><td>R2 バケット</td><td>既存データ削除。キャッシュ用途としてバケット自体は再利用可能</td></tr>\n<tr><td>D1</td><td>新規作成（既存に D1 は無い）</td></tr>\n<tr><td>KV</td><td>新規作成（セッション管理用）</td></tr>\n<tr><td>Cloudflare Access</td><td>不要になるので削除（Google OAuth に移行）</td></tr>\n<tr><td>wrangler.toml</td><td>D1, KV バインディング追加。Access 関連の設定を削除</td></tr>\n</tbody>\n</table>\n<p><strong>既存コードとの関係:</strong></p>\n<table>\n<thead><tr><th>既存ファイル</th><th>方針</th></tr></thead>\n<tbody>\n<tr><td><code>src/middleware/auth.ts</code> (CF Access JWT)</td><td>削除して新規作成（session + API key 認証）</td></tr>\n<tr><td><code>src/routes/api.ts</code></td><td>削除。<code>src/routes/api-v1/</code> に新規作成</td></tr>\n<tr><td><code>src/routes/serve.ts</code> (<code>/pages/:alias</code>)</td><td>削除して新規作成（<code>/p/:alias</code>）</td></tr>\n<tr><td><code>src/storage/r2.ts</code></td><td>キャッシュ層として書き換え</td></tr>\n<tr><td><code>src/types.ts</code> (PageMeta)</td><td>削除。D1 テーブル + 新しい型定義に置換</td></tr>\n</tbody>\n</table>",
+      "review_required": true,
+      "heading_level": 3
+    },
+    {
+      "id": "dev-environment",
+      "type": "html",
+      "title": "開発環境（Docker）",
+      "heading_level": 2,
+      "content": "<p>開発は Docker 上で行う。<code>docker compose up</code> で認証・デプロイ・配信まで一通り動作する環境を構築する。</p>\n<h4>docker-compose.yml</h4>\n<pre><code>services:\n  app:\n    build: .\n    ports:\n      - \"8787:8787\"\n    volumes:\n      - .:/app\n      - node_modules:/app/node_modules\n    env_file:\n      - .dev.vars\n    command: npx wrangler dev --port 8787 --host 0.0.0.0\n\nvolumes:\n  node_modules:</code></pre>\n<h4>Dockerfile</h4>\n<pre><code>FROM node:22-slim\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nEXPOSE 8787</code></pre>\n<h4>.dev.vars（Docker 内で読み込む secrets）</h4>\n<pre><code>GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com\nGOOGLE_CLIENT_SECRET=xxx\nTOKEN_ENCRYPTION_KEY=xxx  # openssl rand -base64 32 で生成\nSESSION_SECRET=xxx\nTEAM_DRIVE_ID=0ABcDeFgHiJkLmN\nALLOWED_SIGNUP_DOMAINS=example.com</code></pre>\n<h4>ローカル動作の前提</h4>\n<ul>\n<li><code>wrangler dev</code> が D1（ローカル SQLite）、KV（ローカルストレージ）、R2（ローカルファイルシステム）を自動作成</li>\n<li>Google Cloud Console で <code>http://localhost:8787/auth/callback</code> を redirect URI に追加</li>\n<li>Google Drive（Shared Drive）への書き込みは実際の Google API を使用するため、OAuth credentials が必要</li>\n</ul>\n<h4>開発ワークフロー</h4>\n<pre><code># 起動\ndocker compose up\n\n# 型チェック + テスト（別ターミナル）\ndocker compose exec app npm run typecheck\ndocker compose exec app npm test\n\n# D1 マイグレーション適用\ndocker compose exec app npx wrangler d1 execute publicar-db --local --file=migrations/0001_init.sql</code></pre>",
+      "review_required": true
+    },
+    {
+      "id": "phase-1",
+      "type": "html",
+      "title": "Phase 1: 認証基盤 + D1 スキーマ + ドメイン制限",
+      "content": "<p>認証基盤を構築し、ドメイン制限付きの Google ログインが動作する状態を作る。全後続フェーズの前提。</p>\n<ul>\n<li>D1 スキーマ作成: users, projects, project_members, project_files, project_access, api_keys, invites (<code>migrations/0001_init.sql</code>)</li>\n<li>Google OAuth フロー + <code>ALLOWED_SIGNUP_DOMAINS</code> によるドメイン制限 (<code>src/auth/oauth.ts</code>)</li>\n<li>トークン暗号化 (<code>src/lib/crypto.ts</code>)</li>\n<li>KV セッション管理 (<code>src/auth/session.ts</code>)</li>\n<li>統合認証ミドルウェア (<code>src/middleware/auth.ts</code>)</li>\n<li>wrangler.toml 更新（D1, KV バインディング追加）</li>\n<li>Docker 開発環境構築（Dockerfile, docker-compose.yml）</li>\n</ul>\n<p><strong>完了条件:</strong> 許可ドメインのユーザーが Google ログイン → セッション Cookie 発行。許可外ドメインは 403。<code>docker compose up</code> でローカル起動 → ブラウザで Google ログイン → セッション確認。typecheck + test pass。</p>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "phase-2",
+      "type": "html",
+      "title": "Phase 2: Shared Drive 統合 + プロジェクト管理 API",
+      "content": "<p>Google Shared Drive とプロジェクト管理 API を実装し、ファイルのアップロード・配信・キャッシュが動作する状態を作る。</p>\n<ul>\n<li>Drive API クライアント: Shared Drive 対応 (<code>src/storage/drive.ts</code>)</li>\n<li>R2 キャッシュ統合 (<code>src/storage/cache.ts</code>)</li>\n<li>token 自動更新 (<code>src/lib/token-refresh.ts</code>)</li>\n<li>プロジェクト CRUD API + project_members 管理 (<code>src/routes/api-v1/projects.ts</code>)</li>\n<li>ワンショットデプロイ: Shared Drive + R2 同時書き込み (<code>src/routes/api-v1/deploy.ts</code>)</li>\n<li>配信フロー: R2 cache → Shared Drive fallback (<code>src/routes/serve.ts</code>)</li>\n</ul>\n<p><strong>完了条件:</strong> deploy → Shared Drive にファイル出現 + R2 キャッシュ。別メンバーが同 alias に再 deploy で上書き可能。Drive 削除 → 404。token 自動 refresh。</p>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "phase-3",
+      "type": "html",
+      "title": "Phase 3: API キー + AI エージェント連携 + ZIP デプロイ",
+      "content": "<p>API キー認証と AI エージェント連携機能を追加し、外部ツールからプログラマティックにデプロイできる状態を作る。</p>\n<ul>\n<li>API キー発行・認証 (<code>src/routes/api-v1/api-keys.ts</code>)</li>\n<li>ZIP 展開処理 (<code>src/lib/zip.ts</code>, fflate)</li>\n<li><code>/llms.txt</code> + OpenAPI 仕様 (<code>src/routes/wellknown.ts</code>, <code>openapi.ts</code>)</li>\n<li>visibility 制御: domain / invite / link / public (<code>src/middleware/visibility.ts</code>)</li>\n<li>旧 API 後方互換 (<code>src/routes/api-legacy.ts</code>)</li>\n</ul>\n<p><strong>完了条件:</strong> AI エージェントが <code>/llms.txt</code> を読み、API キーで ZIP deploy → 共有 URL 取得。visibility=domain で同一ドメインユーザーのみ閲覧可能。</p>",
+      "review_required": true,
+      "heading_level": 2
+    },
+    {
+      "id": "phase-4",
+      "type": "html",
+      "title": "Phase 4: OSS 整備 + ドキュメント",
+      "content": "<p>OSS として公開するためのドキュメント・テンプレート・管理画面を整備する。</p>\n<ul>\n<li>OSS テンプレート (<code>wrangler.toml.example</code>, <code>.dev.vars.example</code>)</li>\n<li>セットアップガイド (<code>docs/setup.md</code>, <code>docs/google-oauth-setup.md</code>)</li>\n<li>README 書き直し + LICENSE</li>\n</ul>\n<p><strong>完了条件:</strong> README 手順で新規ユーザーが組織向けインスタンスをデプロイ可能。OpenAPI spec が valid。</p>\n<h4>バックログ（当面実装しない）</h4>\n<ul>\n<li>個人モード（<code>TEAM_DRIVE_ID</code> 未設定時のマイドライブ保存）</li>\n<li>招待制アカウント登録（<code>invites</code> テーブル + <code>POST /api/v1/invites</code>）</li>\n<li><code>ALLOW_PUBLIC_SIGNUP</code> による公開登録</li>\n<li><code>visibility: group</code>（Google Group 単位のアクセス制御）</li>\n</ul>",
+      "review_required": false,
+      "heading_level": 2
+    },
+    {
+      "id": "oss-setup",
+      "type": "html",
+      "title": "OSS セットアップ手順",
+      "content": "<ol>\n<li>Cloudflare アカウント作成（Workers 無料プランで可）</li>\n<li>Google Cloud Console で OAuth 2.0 クライアント作成\n  <ul>\n  <li>リダイレクト URI: <code>https://&lt;your-domain&gt;/auth/callback</code></li>\n  <li>スコープ: openid, email, profile, drive.file</li>\n  </ul>\n</li>\n</ol>\n<pre><code># 1. リソース作成\nwrangler d1 create publicar\nwrangler kv namespace create SESSIONS\nwrangler r2 bucket create publicar-cache\n\n# 2. wrangler.toml に ID を記入後、スキーマ適用\nwrangler d1 execute publicar --file=./migrations/0001_init.sql\n\n# 3. シークレット設定\necho \"&lt;value&gt;\" | wrangler secret put GOOGLE_CLIENT_ID\necho \"&lt;value&gt;\" | wrangler secret put GOOGLE_CLIENT_SECRET\nopenssl rand -base64 32 | wrangler secret put TOKEN_ENCRYPTION_KEY\nopenssl rand -base64 32 | wrangler secret put SESSION_SECRET\n\n# 4. デプロイ\nwrangler deploy</code></pre>",
+      "review_required": false,
+      "heading_level": 2
+    },
+    {
+      "id": "env-vars",
+      "type": "html",
+      "title": "環境変数（secret）",
+      "content": "<table>\n<thead><tr><th>変数名</th><th>用途</th></tr></thead>\n<tbody>\n<tr><td><code>GOOGLE_CLIENT_ID</code></td><td>OAuth Client ID</td></tr>\n<tr><td><code>GOOGLE_CLIENT_SECRET</code></td><td>OAuth Client Secret</td></tr>\n<tr><td><code>TOKEN_ENCRYPTION_KEY</code></td><td>AES-256 暗号化キー</td></tr>\n<tr><td><code>SESSION_SECRET</code></td><td>セッション HMAC キー</td></tr>\n<tr><td><code>TEAM_DRIVE_ID</code></td><td>wrangler.toml vars</td><td>組織の Shared Drive ID（未設定なら個人モード）</td></tr>\n<tr><td><code>DEFAULT_VISIBILITY</code></td><td>wrangler.toml vars</td><td>新規プロジェクトのデフォルト公開範囲（未設定なら <code>private</code>）</td></tr>\n<tr><td><code>ALLOW_PUBLIC_SIGNUP</code></td><td>wrangler.toml vars</td><td>Google アカウントを持つ全員の登録を許可（未設定なら招待制）</td></tr>\n</tbody>\n</table>",
+      "review_required": false,
+      "heading_level": 3
+    },
+    {
+      "id": "verification",
+      "type": "html",
+      "title": "検証方法",
+      "content": "<p><strong>各フェーズ共通:</strong></p>\n<ol>\n<li><code>npm run typecheck</code> — 型エラーなし</li>\n<li><code>npm test</code> — 全テスト pass</li>\n<li><code>docker compose up</code> (docker compose up) で手動確認</li>\n</ol>\n<p><strong>フェーズ別検証:</strong></p>\n<table>\n<thead><tr><th>Phase</th><th>検証内容</th></tr></thead>\n<tbody>\n<tr><td>1</td><td>ブラウザで Google ログイン → セッション Cookie 確認 → ログアウト</td></tr>\n<tr><td>2</td><td>curl で API キー発行 → deploy → URL 閲覧 → visibility 切替</td></tr>\n<tr><td>3</td><td>Drive にファイル出現確認 → Drive 上で削除 → 404 確認 → token refresh 確認</td></tr>\n<tr><td>4</td><td>ZIP deploy → 展開確認 → README 手順で新規デプロイ</td></tr>\n</tbody>\n</table>",
+      "review_required": false,
+      "heading_level": 2
+    },
+    {
+      "id": "final-e2e",
+      "type": "callout",
+      "title": "最終 E2E 検証",
+      "content": "AI エージェント (Claude Code) が /llms.txt を読み → API キーで HTML をデプロイし → 共有 URL を取得する一連のフローが動作すること",
+      "review_required": false,
+      "heading_level": 3
+    },
+    {
+      "id": "gui-design-overview",
+      "type": "html",
+      "title": "GUI デザイン要求仕様",
+      "heading_level": 2,
+      "content": "<p>publicar の Web UI はシンプルな管理画面として設計する。主な利用者は組織内のレポート作成者（AI エージェント経由が主）と、レポートの閲覧者。UI は最小限で、主要操作は API 経由を前提とする。</p>\n<h4>デザイン原則</h4>\n<ul>\n<li><strong>ダークテーマ基調</strong>: 背景 <code>#0a0a0a</code>〜<code>#1a1a1a</code>、文字 <code>#e0e0e0</code>。開発者・技術者向けツールとしてのトーン</li>\n<li><strong>レスポンシブ</strong>: デスクトップ優先だがモバイルでも閲覧可能</li>\n<li><strong>フレームワーク不使用</strong>: Vanilla HTML/CSS/JS。Workers で配信するため軽量に保つ</li>\n<li><strong>日本語 UI</strong>: ラベル・メッセージは日本語。技術用語（alias, visibility 等）は原語のまま</li>\n</ul>",
+      "review_required": true
+    },
+    {
+      "id": "gui-screens",
+      "type": "html",
+      "title": "画面一覧",
+      "heading_level": 3,
+      "content": "<table>\n<thead><tr><th>画面</th><th>パス</th><th>認証</th><th>用途</th></tr></thead>\n<tbody>\n<tr><td>ログイン</td><td><code>/</code> (未認証時)</td><td>不要</td><td>Google OAuth ログインボタン</td></tr>\n<tr><td>ダッシュボード</td><td><code>/</code> (認証済)</td><td>必要</td><td>自分が関わるプロジェクト一覧</td></tr>\n<tr><td>プロジェクト詳細</td><td><code>/projects/:id</code></td><td>必要</td><td>ファイル一覧、設定、メンバー管理</td></tr>\n<tr><td>API キー管理</td><td><code>/settings/api-keys</code></td><td>必要</td><td>API キーの発行・削除</td></tr>\n<tr><td>コンテンツ配信</td><td><code>/p/:alias</code></td><td>visibility 依存</td><td>アップロードされた HTML の表示</td></tr>\n</tbody>\n</table>",
+      "review_required": true
+    },
+    {
+      "id": "gui-login",
+      "type": "html",
+      "title": "ログイン画面",
+      "heading_level": 3,
+      "content": "<p>未認証ユーザーがアクセスした際に表示する。</p>\n<ul>\n<li>中央配置のカード型レイアウト</li>\n<li>publicar ロゴ（テキストロゴ: モノスペースフォント、白文字）</li>\n<li>「Google でログイン」ボタン（Google ブランドガイドライン準拠）</li>\n<li>サービス説明の 1 行テキスト: 「AI 生成レポート共有基盤」</li>\n<li><code>ALLOWED_SIGNUP_DOMAINS</code> 設定時: 「<code>@example.com</code> のアカウントでログインしてください」の案内表示</li>\n<li>許可外ドメインでログイン試行時: エラーメッセージ「このドメインのアカウントでは登録できません」</li>\n</ul>",
+      "review_required": false
+    },
+    {
+      "id": "gui-dashboard",
+      "type": "html",
+      "title": "ダッシュボード",
+      "heading_level": 3,
+      "content": "<p>認証済みユーザーのランディングページ。自分が owner / editor / viewer として関わるプロジェクトを一覧表示する。</p>\n<h4>レイアウト</h4>\n<ul>\n<li>ヘッダー: publicar ロゴ（左）、ユーザーアバター + メールアドレス（右）、ログアウトリンク</li>\n<li>メインエリア: プロジェクトカードのグリッド表示（2〜3 列）</li>\n</ul>\n<h4>プロジェクトカード</h4>\n<table>\n<thead><tr><th>要素</th><th>内容</th></tr></thead>\n<tbody>\n<tr><td>タイトル</td><td>プロジェクト名（クリックで詳細画面へ）</td></tr>\n<tr><td>alias</td><td><code>/p/:alias</code> のリンク（新規タブで開く）</td></tr>\n<tr><td>visibility バッジ</td><td>色分け: private=赤, invite=橙, domain=青, link=緑, public=グレー</td></tr>\n<tr><td>自分の role</td><td>owner / editor / viewer のバッジ</td></tr>\n<tr><td>最終更新</td><td>相対時間表示（「3 時間前」等）</td></tr>\n<tr><td>ファイル数</td><td>プロジェクト内のファイル数</td></tr>\n<tr><td>作成者</td><td>アバター（小）+ 名前。組織利用時に誰が作ったプロジェクトか識別するため</td></tr>\n</tbody>\n</table>\n<h4>操作</h4>\n<ul>\n<li>検索バー: タイトル・alias でフィルタ</li>\n<li>「新規プロジェクト」ボタン: ダイアログで title と alias を入力して作成（owner として登録）</li>\n</ul>",
+      "review_required": true
+    },
+    {
+      "id": "gui-project-detail",
+      "type": "html",
+      "title": "プロジェクト詳細画面",
+      "heading_level": 3,
+      "content": "<p>個別プロジェクトの管理画面。タブで情報を切り替える。</p>\n<h4>タブ構成</h4>\n<table>\n<thead><tr><th>タブ</th><th>表示条件</th><th>内容</th></tr></thead>\n<tbody>\n<tr><td><strong>ファイル</strong></td><td>全 role</td><td>プロジェクト内のファイルツリー。各ファイルのサイズ、更新日時。クリックでプレビュー（<code>/p/:alias/:path</code> を iframe で表示）</td></tr>\n<tr><td><strong>設定</strong></td><td>owner のみ</td><td>title, alias, visibility, allowed_domains, entry_path の編集フォーム</td></tr>\n<tr><td><strong>メンバー</strong></td><td>owner のみ</td><td>このプロジェクトを編集できるユーザーの管理。メンバー一覧（email, role, 追加日）。メンバー追加フォーム（email + role 選択）、role 変更、削除。<em>閲覧権限は visibility で制御するため、閲覧のみのユーザーをここに追加する必要はない（visibility: domain なら同一ドメイン全員が閲覧可能）</em></td></tr>\n<tr><td><strong>デプロイ履歴</strong></td><td>owner / editor</td><td>直近のデプロイ一覧（日時、実行者、ファイル数）</td></tr>\n</tbody>\n</table>\n<h4>ファイルタブの操作</h4>\n<ul>\n<li>owner / editor: 「ファイルをアップロード」ボタン（ドラッグ &amp; ドロップ対応）、「ZIP をアップロード」ボタン</li>\n<li>owner: 「プロジェクトを削除」ボタン（確認ダイアログ付き）</li>\n</ul>\n<h4>設定タブ: visibility 設定</h4>\n<ul>\n<li>visibility をセレクトボックスで選択（<code>group</code> は disabled 状態 +「近日対応」のラベル）</li>\n<li><code>invite</code> 選択時: 招待メールアドレス入力欄が表示</li>\n<li><code>domain</code> 選択時: 許可ドメイン入力欄が表示（デフォルトでログインユーザーのドメインが入力済み）</li>\n</ul>",
+      "review_required": true
+    },
+    {
+      "id": "gui-api-keys",
+      "type": "html",
+      "title": "API キー管理画面",
+      "heading_level": 3,
+      "content": "<p>ユーザー設定配下の API キー管理。</p>\n<h4>レイアウト</h4>\n<ul>\n<li>既存キー一覧: 名前、key_prefix（<code>pub_xxxxxxxx...</code>）、スコープバッジ、最終使用日時、有効期限</li>\n<li>「新しい API キーを発行」ボタン → ダイアログ:\n  <ul>\n  <li>名前（必須）: 用途を識別するラベル（例: 「Claude Code 用」）</li>\n  <li>スコープ（チェックボックス）: read, write, deploy</li>\n  <li>有効期限（任意）: 30日 / 90日 / 1年 / 無期限</li>\n  </ul>\n</li>\n<li>発行後: フルキーを 1 回だけ表示。コピーボタン付き。「このキーは再表示できません」の警告</li>\n<li>削除: 確認ダイアログ付き</li>\n</ul>",
+      "review_required": false
+    },
+    {
+      "id": "gui-content-serve",
+      "type": "html",
+      "title": "コンテンツ配信画面",
+      "heading_level": 3,
+      "content": "<p><code>/p/:alias</code> でアクセスされた際のコンテンツ表示。</p>\n<h4>visibility ごとの挙動</h4>\n<table>\n<thead><tr><th>visibility</th><th>未認証時</th><th>認証済 + 権限なし</th></tr></thead>\n<tbody>\n<tr><td>public / link</td><td>コンテンツをそのまま表示</td><td>—</td></tr>\n<tr><td>domain</td><td>ログイン画面へリダイレクト</td><td>「アクセス権がありません」+ ログイン中のメールアドレス表示</td></tr>\n<tr><td>invite</td><td>ログイン画面へリダイレクト</td><td>「アクセス権がありません。プロジェクトオーナーに招待を依頼してください」</td></tr>\n<tr><td>private</td><td>ログイン画面へリダイレクト</td><td>404（存在自体を隠す）</td></tr>\n</tbody>\n</table>\n<h4>表示方式</h4>\n<ul>\n<li>アップロードされた HTML をそのまま配信（publicar の UI 要素は挿入しない）</li>\n<li>管理者バー: owner / editor がログイン中の場合のみ、ページ上部に薄いバーを表示（プロジェクト名、編集リンク、visibility バッジ）。非 owner には表示しない</li>\n</ul>",
+      "review_required": true
+    },
+    {
+      "id": "gui-components",
+      "type": "html",
+      "title": "共通コンポーネント",
+      "heading_level": 3,
+      "content": "<h4>カラーパレット</h4>\n<table>\n<thead><tr><th>用途</th><th>色</th></tr></thead>\n<tbody>\n<tr><td>背景（メイン）</td><td><code>#0a0a0a</code></td></tr>\n<tr><td>背景（カード・入力欄）</td><td><code>#1a1a1a</code></td></tr>\n<tr><td>背景（ホバー）</td><td><code>#2a2a2a</code></td></tr>\n<tr><td>ボーダー</td><td><code>#333333</code></td></tr>\n<tr><td>テキスト（主）</td><td><code>#e0e0e0</code></td></tr>\n<tr><td>テキスト（副）</td><td><code>#888888</code></td></tr>\n<tr><td>アクセント</td><td><code>#3b82f6</code>（青）</td></tr>\n<tr><td>危険操作</td><td><code>#ef4444</code>（赤）</td></tr>\n<tr><td>成功</td><td><code>#22c55e</code>（緑）</td></tr>\n</tbody>\n</table>\n<h4>タイポグラフィ</h4>\n<ul>\n<li>本文: <code>system-ui, -apple-system, sans-serif</code></li>\n<li>コード・alias: <code>ui-monospace, monospace</code></li>\n<li>ロゴ: <code>ui-monospace</code>、太字、レターペーシング広め</li>\n</ul>\n<h4>共通パーツ</h4>\n<ul>\n<li>ボタン: 角丸 <code>6px</code>、パディング <code>8px 16px</code>。primary=青背景白文字、secondary=透明ボーダー、danger=赤背景</li>\n<li>カード: 角丸 <code>8px</code>、ボーダー <code>#333</code>、ホバーでボーダー明るく</li>\n<li>バッジ: 小さい角丸ラベル、背景色で種類を区別</li>\n<li>ダイアログ: 中央モーダル、背景オーバーレイ <code>rgba(0,0,0,0.7)</code></li>\n<li>トースト通知: 右下に一時表示。成功=緑、エラー=赤</li>\n</ul>",
+      "review_required": false
+    },
+    {
+      "id": "review-points",
+      "type": "html",
+      "title": "レビュー観点",
+      "content": "<p><strong>レビューでコメントいただきたい観点:</strong></p>\n<ol>\n<li>Drive + R2 のキャッシュ戦略は妥当か（Drive 障害時のフォールバック、キャッシュ無効化タイミング）</li>\n<li>D1 スキーマの正規化レベルと allowed_domains の JSON 格納は適切か</li>\n<li>API キーの形式 pub_&lt;base62&gt; と SHA-256 保存は十分か</li>\n<li>visibility モデルの 5 段階は過不足ないか</li>\n<li>4 フェーズの分割粒度と依存関係は適切か</li>\n<li>OSS としての最小構成（必要な設定、ドキュメント）は十分か</li>\n</ol>",
+      "review_required": true,
+      "heading_level": 3
+    },
+    {
+      "id": "gui-claude-design-prompt",
+      "type": "html",
+      "title": "Claude Design 用プロンプト",
+      "heading_level": 3,
+      "content": "<p>以下をそのまま Claude Design に貼り付けて使用する。</p>\n<pre><code>publicar — AI 生成レポート共有基盤の Web UI をデザインしてください。\n\n## サービス概要\n組織内で AI エージェントが生成した HTML レポートを共有するための Cloudflare Workers ベースのホスティングサービス。組織の Google Shared Drive にファイルを保存し、ドメイン単位でアクセス制御する。\n\n## デザイン原則\n- ダークテーマ基調（背景 #0a0a0a〜#1a1a1a、文字 #e0e0e0）\n- 開発者・技術者向けのクリーンで落ち着いたトーン\n- フレームワーク不使用を前提としたシンプルな構造\n- 日本語 UI（技術用語 alias, visibility 等は原語のまま）\n- レスポンシブ（デスクトップ優先）\n\n## カラーパレット\n- 背景メイン: #0a0a0a\n- 背景カード・入力欄: #1a1a1a\n- 背景ホバー: #2a2a2a\n- ボーダー: #333333\n- テキスト主: #e0e0e0\n- テキスト副: #888888\n- アクセント: #3b82f6（青）\n- 危険操作: #ef4444（赤）\n- 成功: #22c55e（緑）\n\n## タイポグラフィ\n- 本文: system-ui, -apple-system, sans-serif\n- コード・alias: ui-monospace, monospace\n- ロゴ「publicar」: ui-monospace、太字、レタースペーシング広め、白文字\n\n## デザインする画面（5 画面）\n\n### 1. ログイン画面（パス: / 未認証時）\n- 中央配置のカード型レイアウト\n- publicar テキストロゴ（モノスペース太字、白）\n- 「AI 生成レポート共有基盤」の 1 行説明\n- 「Google でログイン」ボタン（Google ブランドガイドライン準拠の見た目）\n- カード下部に「@example.com のアカウントでログインしてください」のドメイン案内テキスト（副テキスト色）\n\n### 2. ダッシュボード（パス: / 認証済み）\n- ヘッダー: 左に publicar ロゴ、右にユーザーアバター（丸）+ メールアドレス + ログアウトリンク\n- メインエリア: プロジェクトカードのグリッド（2〜3 列）\n- 各カードの内容:\n  - プロジェクト名（リンク）\n  - alias 表示（モノスペース、/p/my-report のような形式。alias は URL 用識別子で、title が英数字のみなら title から自動生成、日本語を含む場合はランダム生成。ユーザーが明示指定も可能）\n  - visibility バッジ（色分け: private=赤, invite=橙, domain=青, link=緑, public=グレー）\n  - 自分の role バッジ（owner / editor / viewer）\n  - 最終更新の相対時間（「3 時間前」）\n  - 作成者（アバター小 + 名前、例:「田中太郎」）\n  - ファイル数\n- ヘッダー下に検索バー + 「新規プロジェクト」ボタン（青）\n- サンプルデータ: 6 件のプロジェクトカードを表示。visibility と role はバラけさせる\n\n### 3. プロジェクト詳細画面（パス: /projects/:id）\n- ヘッダーはダッシュボードと共通\n- パンくずリスト: ダッシュボード &gt; プロジェクト名\n- タブ切替 UI（下線スタイル）: ファイル | 設定 | メンバー | デプロイ履歴\n- 「ファイル」タブ（デフォルト表示）:\n  - ファイルツリー表示（インデント付きリスト）\n  - 各行: ファイル名、サイズ、更新日時\n  - 上部に「ファイルをアップロード」「ZIP をアップロード」ボタン\n  - サンプル: index.html, styles/main.css, assets/chart.png 等 5〜6 ファイル\n- 「メンバー」タブの内容も別途デザイン:\n  - メンバー一覧テーブル: アバター、メール、role（セレクトボックス）、追加日、削除ボタン\n  - 「メンバーを追加」フォーム: メールアドレス入力 + role セレクト + 追加ボタン\n\n### 4. API キー管理画面（パス: /settings/api-keys）\n- ヘッダー共通\n- 既存キー一覧テーブル: 名前、プレフィックス（pub_xxxxxxxx...）、スコープバッジ（read/write/deploy）、最終使用日時、削除ボタン（赤）\n- 「新しい API キーを発行」ボタン（青）\n- 発行後のモーダルダイアログ:\n  - 「API キーが発行されました」タイトル\n  - フルキー表示エリア（モノスペース、背景 #1a1a1a、ボーダー付き）\n  - 「コピー」ボタン\n  - ⚠️ 警告テキスト「このキーは再表示できません。安全な場所に保存してください」\n  - 「閉じる」ボタン\n\n### 5. コンテンツ配信画面（パス: /p/:alias、管理者ログイン中）\n- 画面最上部に薄い管理者バー（高さ 32px 程度、背景 #1a1a1a、ボーダー下線）\n  - 左: プロジェクト名（リンク）\n  - 中央: visibility バッジ（domain）\n  - 右:「編集」リンク（プロジェクト詳細へ）\n- バー以下はアップロードされた HTML コンテンツがフル幅で表示される想定（プレースホルダーでよい）\n\n## 共通コンポーネント仕様\n- ボタン: 角丸 6px、パディング 8px 16px。primary=青背景白文字、secondary=透明+ボーダー、danger=赤背景\n- カード: 角丸 8px、ボーダー #333、ホバーでボーダーが少し明るくなる\n- バッジ: 小さい角丸ラベル、背景色で種類を区別、フォントサイズ小さめ\n- ダイアログ: 中央モーダル、背景オーバーレイ rgba(0,0,0,0.7)\n- トースト通知: 右下に一時表示、成功=緑枠、エラー=赤枠</code></pre>",
+      "review_required": false
+    }
+  ]
+}

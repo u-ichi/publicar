@@ -1,0 +1,266 @@
+{
+  "schema_version": "1.0",
+  "renderer_version": "0.1.0",
+  "generated_at": "2026-06-16T15:51:33.044690+00:00",
+  "input": {
+    "path": "docs/design/document-model.json",
+    "sha256": "97840b40418bc43fa6772358206b11eaa4444059c6c18f72621de6db9a35daaf"
+  },
+  "document": {
+    "id": "publicar-redesign-v1",
+    "title": "publicar 再設計: SSSS 相当の OSS AI レポート共有基盤"
+  },
+  "outputs": {
+    "index": "index.html",
+    "assets": [
+      "assets/style.css",
+      "assets/review-comments.js"
+    ],
+    "diagrams": [
+      "assets/diagrams/architecture-diagram.mmd",
+      "assets/diagrams/data-model-relationships.mmd",
+      "assets/diagrams/auth-oauth-flow.mmd"
+    ],
+    "images": []
+  },
+  "diagrams": [
+    {
+      "block_id": "architecture-diagram",
+      "kind": "flow",
+      "source": "assets/diagrams/architecture-diagram.mmd"
+    },
+    {
+      "block_id": "data-model-relationships",
+      "kind": "architecture",
+      "source": "assets/diagrams/data-model-relationships.mmd"
+    },
+    {
+      "block_id": "auth-oauth-flow",
+      "kind": "flow",
+      "source": "assets/diagrams/auth-oauth-flow.mmd"
+    }
+  ],
+  "review_blocks": [
+    {
+      "id": "document-header",
+      "type": "header",
+      "review_required": false
+    },
+    {
+      "id": "overview",
+      "type": "callout",
+      "review_required": false
+    },
+    {
+      "id": "goals",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "design-decisions",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "architecture-diagram",
+      "type": "diagram",
+      "review_required": true,
+      "diagram_kind": "flow",
+      "diagram_source": "assets/diagrams/architecture-diagram.mmd"
+    },
+    {
+      "id": "data-flow-upload",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "data-flow-serve",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "data-model-overview",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "data-model-entities",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "data-model-relationships",
+      "type": "diagram",
+      "review_required": false,
+      "diagram_kind": "architecture",
+      "diagram_source": "assets/diagrams/data-model-relationships.mmd"
+    },
+    {
+      "id": "data-model-deploy",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "d1-schema",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "d1-schema-sql",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "auth-oauth-flow",
+      "type": "diagram",
+      "review_required": true,
+      "diagram_kind": "flow",
+      "diagram_source": "assets/diagrams/auth-oauth-flow.mmd"
+    },
+    {
+      "id": "auth-api-key",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "auth-middleware",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "auth-security",
+      "type": "callout",
+      "review_required": true
+    },
+    {
+      "id": "api-deploy",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "api-projects",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "api-keys-ai",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "owner-model",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "visibility-model",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "file-structure",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "migration-plan",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "dev-environment",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "phase-1",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "phase-2",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "phase-3",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "phase-4",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "oss-setup",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "env-vars",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "verification",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "final-e2e",
+      "type": "callout",
+      "review_required": false
+    },
+    {
+      "id": "gui-design-overview",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "gui-screens",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "gui-login",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "gui-dashboard",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "gui-project-detail",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "gui-api-keys",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "gui-content-serve",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "gui-components",
+      "type": "html",
+      "review_required": false
+    },
+    {
+      "id": "review-points",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "gui-claude-design-prompt",
+      "type": "html",
+      "review_required": false
+    }
+  ]
+}

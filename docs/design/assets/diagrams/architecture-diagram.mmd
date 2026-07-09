@@ -1,0 +1,23 @@
+graph TB
+    subgraph Clients
+        Browser[Browser / AI Agent]
+    end
+    subgraph Google
+        OAuth[Google OAuth 2.0]
+        Drive[Google Drive API v3]
+    end
+    subgraph CF[Cloudflare Workers]
+        Hono[Hono Router]
+    end
+    subgraph Storage
+        R2[R2 Cache]
+        D1[D1 SQLite]
+        KV[KV Sessions]
+    end
+    Browser -->|request| Hono
+    Hono -->|auth| OAuth
+    Hono -->|read/write| Drive
+    Hono -->|cache| R2
+    Hono -->|metadata| D1
+    Hono -->|session| KV
+    Hono -->|response| Browser
