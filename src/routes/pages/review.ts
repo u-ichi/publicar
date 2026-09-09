@@ -55,6 +55,13 @@ export function commentWorkbenchPage(user: AuthUser, project: Project, path: str
   const headerControls = `<button class="comment-mode-button" type="button" data-comment-mode-toggle aria-pressed="false">${commentIcon}<span>コメント</span></button>`;
   return page(
     `${project.title} - publicar`,
+    `<script>
+// ヘッダーを読み込む前に親画面へ移動し、通信が遅い場合も重複表示を防ぐ。
+if (window.frameElement?.id === "review-frame") {
+  document.documentElement.style.display = "none";
+  window.parent.location.replace(window.location.href);
+}
+</script>` +
     shell(
       user,
       `<div class="comment-workbench" data-comment-workbench>
@@ -1017,10 +1024,8 @@ function reviewFrameInitialSrc() {
   return baseSrc + (parentRouteHash() || "");
 }
 function startReviewFrame() {
-  // 本文内で別ファイルへ移動した場合は親画面を更新し、ヘッダーの入れ子と
-  // 表示ファイル・コメント対象の不一致を防ぐ。同一オリジンのレビュー画面だけを対象にする。
+  // 親画面への移動中は、新しい本文の読み込みを開始しない。
   if (workbench && window.frameElement?.id === "review-frame") {
-    window.parent.location.replace(window.location.href);
     return;
   }
   const src = reviewFrameInitialSrc();
