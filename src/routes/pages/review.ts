@@ -1017,6 +1017,12 @@ function reviewFrameInitialSrc() {
   return baseSrc + (parentRouteHash() || "");
 }
 function startReviewFrame() {
+  // 本文内で別ファイルへ移動した場合は親画面を更新し、ヘッダーの入れ子と
+  // 表示ファイル・コメント対象の不一致を防ぐ。同一オリジンのレビュー画面だけを対象にする。
+  if (workbench && window.frameElement?.id === "review-frame") {
+    window.parent.location.replace(window.location.href);
+    return;
+  }
   const src = reviewFrameInitialSrc();
   if (!src) {
     commentsRoot.innerHTML = '<div class="empty">レビュー対象HTMLを読み込めません</div>';
