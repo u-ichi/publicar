@@ -97,6 +97,7 @@ export function page(title: string, body: string): string {
       --highlight-border:rgba(210,153,34,.48); --green:#1a7f37; --green-bg:rgba(26,127,55,.12);
       --red:#cf222e; --red-bg:rgba(207,34,46,.10); --orange:#9a6700;
     }
+    html { background: var(--bg); }
     body { margin: 0; background: var(--bg); color: var(--tx); font: 14px/1.5 system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
     a { color: #3b82f6; text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -225,8 +226,8 @@ export function page(title: string, body: string): string {
     .review-shell { width: min(1600px, calc(100vw - 24px)); margin: 0 auto; padding: 16px 0 28px; }
     .review-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
     .review-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; min-height: calc(100vh - 132px); }
-    .review-frame-wrap { border: 1px solid var(--border); border-radius: 8px; background: #fff; overflow: hidden; min-height: 640px; }
-    .review-frame { width: 100%; height: calc(100vh - 146px); min-height: 640px; border: 0; background: #fff; }
+    .review-frame-wrap { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); overflow: hidden; min-height: 640px; }
+    .review-frame { width: 100%; height: calc(100vh - 146px); min-height: 640px; border: 0; background: var(--bg); }
     .review-rail { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); display: grid; grid-template-rows: auto 1fr; min-height: 0; overflow: hidden; }
     .review-rail-head { min-height: 48px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .review-rail-title { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; font-size: 14px; font-weight: 650; }
@@ -276,8 +277,8 @@ export function page(title: string, body: string): string {
     .comment-mode-button { min-height: 31px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; background: transparent; color: var(--tx-2); font-size: 13px; font-weight: 600; transition: background .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
     .comment-mode-button:hover { background: var(--surface-hover); border-color: var(--border-2); }
     .comment-mode-button[aria-pressed="true"] { color: #fff; background: var(--green); border-color: var(--green); }
-    .comment-workbench { position: relative; height: calc(100vh - 56px); min-height: 0; overflow: hidden; background: #fff; }
-    .comment-workbench-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+    .comment-workbench { position: relative; height: calc(100vh - 56px); min-height: 0; overflow: hidden; background: var(--bg); }
+    .comment-workbench-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
     .comment-workbench .review-rail { position: fixed; z-index: 80; top: 56px; right: 0; bottom: 0; width: min(340px, 100vw); min-height: 0; border-top: 0; border-bottom: 0; border-right: 0; border-radius: 0; box-shadow: -16px 0 32px rgba(15, 23, 42, .12); transform: translateX(100%); visibility: hidden; pointer-events: none; transition: transform .2s ease, visibility .2s ease; }
     .comment-workbench.comment-rail-open .review-rail { transform: translateX(0); visibility: visible; pointer-events: auto; }
     @keyframes popIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
