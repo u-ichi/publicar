@@ -11,6 +11,10 @@ import { createDriveFolder, trashDriveFile, uploadDriveFile } from "../../storag
 import { deleteCachedFile, putCachedFile } from "../../storage/r2";
 import { driveFailureResponse } from "./drive-errors";
 import { roleErrorResponse } from "./guards";
+import { getProjectStorage } from "../../storage/service-account-drive";
+import { deployServiceAccount } from "./deploy-service-account";
+import { beginLegacyStorageOperation, assertLegacyStorageOperation, finishLegacyStorageOperation } from "../../db/storage-transition";
+import { boundedUploadBody, UploadInputError } from "../../lib/upload-body";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
@@ -37,19 +41,11 @@ async function sha256Digest(body: ArrayBuffer): Promise<string> {
 }
 
 async function readUploadBody(c: Context<AppBindings>): Promise<ArrayBuffer | Response> {
-  const contentLength = c.req.header("Content-Length");
-  const maxBytes = uploadLimit(c.env);
-  if (contentLength && Number(contentLength) > maxBytes) {
-    return c.json({ error: "payload_too_large" }, 413);
+  try { return await boundedUploadBody(c.req.raw, uploadLimit(c.env)); }
+  catch (error) {
+    if (error instanceof UploadInputError) return c.json({ error: error.message }, error.status);
+    throw error;
   }
-  const body = await c.req.arrayBuffer();
-  if (body.byteLength === 0) {
-    return c.json({ error: "empty_upload" }, 400);
-  }
-  if (body.byteLength > maxBytes) {
-    return c.json({ error: "payload_too_large" }, 413);
-  }
-  return body;
 }
 
 function isDriveConfigured(env: Env): boolean {
@@ -66,7 +62,9 @@ async function ensureProjectDriveFolder(c: Context<AppBindings>, project: NonNul
   if (!folderId) {
     folderId = await withDriveAuthRetry(c.env, userId, async (token) => {
       accessToken = token;
+      await assertLegacyDeploy(c);
       const folder = await createDriveFolder(c.env, accessToken, project.alias);
+      await assertLegacyDeploy(c);
       await updateProject(c.env, project.id, { driveFolderId: folder.id });
       return folder.id;
     });
@@ -89,6 +87,7 @@ async function uploadProjectFile(
 ) {
   const previousFile = await getProjectFile(c.env, input.projectId, input.path);
   const driveFile = await withDriveAuthRetry(c.env, c.get("user").id, async (accessToken) => {
+    await assertLegacyDeploy(c);
     return uploadDriveFile(c.env, accessToken, {
       fileId: previousFile?.driveFileId,
       parentId: input.folderId,
@@ -98,7 +97,9 @@ async function uploadProjectFile(
     });
   }, { initialAccessToken: input.accessToken });
 
+  await assertLegacyDeploy(c);
   const cacheEtag = await putCachedFile(c.env, previousFile?.r2Key ?? r2KeyForProjectFile(input.projectId, input.path), input.body, input.contentType);
+  await assertLegacyDeploy(c);
   return upsertProjectFile(c.env, {
     projectId: input.projectId,
     path: input.path,
@@ -117,10 +118,13 @@ async function trashStaleFile(c: Context<AppBindings>, projectId: string, path: 
   if (file?.driveFileId) {
     const driveFileId = file.driveFileId;
     await withDriveAuthRetry(c.env, file.driveOwnerUserId ?? c.get("user").id, async (accessToken) => {
+      await assertLegacyDeploy(c);
       return trashDriveFile(c.env, accessToken, driveFileId);
     });
   }
+  await assertLegacyDeploy(c);
   await deleteCachedFile(c.env, r2KeyForProjectFile(projectId, path));
+  await assertLegacyDeploy(c);
   await deleteProjectFile(c.env, projectId, path);
 }
 
@@ -139,6 +143,23 @@ function normalizeZipEntries(entries: ZipEntry[]): Array<ZipEntry & { path: stri
 }
 
 export async function deployProject(c: Context<AppBindings>): Promise<Response> {
+  const storage = await getProjectStorage(c.env, c.req.param("id")!);
+  if (c.get("uploadKey") || storage?.storage_service_account) return deployServiceAccount(c);
+  if (!storage) return c.json({ error: "not_found" }, 404);
+  const role = await getProjectRole(c.env, c.req.param("id")!, c.get("user").id);
+  if (!canEditProject(role)) return roleErrorResponse(c, role);
+  const operation = await beginLegacyStorageOperation(c.env, c.req.param("id")!);
+  if (!operation) return c.json({ error: "project_storage_changed" }, 409);
+  c.set("legacyDeploy", operation);
+  try { return await deployLegacyProject(c); }
+  finally { await finishLegacyStorageOperation(c.env, operation); }
+}
+
+async function assertLegacyDeploy(c: Context<AppBindings>): Promise<void> {
+  return assertLegacyStorageOperation(c.env, c.get("legacyDeploy")!);
+}
+
+async function deployLegacyProject(c: Context<AppBindings>): Promise<Response> {
   if (!isDriveConfigured(c.env)) {
     return c.json({ error: "team_drive_not_configured" }, 503);
   }
@@ -162,7 +183,8 @@ export async function deployProject(c: Context<AppBindings>): Promise<Response> 
     let extractedEntries: ZipEntry[];
     try {
       extractedEntries = extractZip(body);
-    } catch {
+    } catch (error) {
+      if (error instanceof UploadInputError) return c.json({ error: error.message }, error.status);
       return c.json({ error: "invalid_zip" }, 400);
     }
     const entries = normalizeZipEntries(extractedEntries);
@@ -195,6 +217,7 @@ export async function deployProject(c: Context<AppBindings>): Promise<Response> 
           await trashStaleFile(c, project.id, file.path);
         }
       }
+      await assertLegacyDeploy(c);
       await updateProject(c.env, project.id, { entryPath });
     } catch (error) {
       const response = driveFailureResponse(c, error);

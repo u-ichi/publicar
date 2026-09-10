@@ -1,8 +1,9 @@
-import { validateSessionSecret } from "./session";
+import { validateSessionSecret, parseCookie } from "./session";
 import { createRemoteJWKSet, jwtVerify } from "./verify";
+import { claimProjectAccessForUser, hasInviteAccessForLogin } from "../db/projects";
 import { upsertOAuthUser } from "../db/users";
-import type { AuthUser, Env } from "../env";
-import { encryptToken, validateTokenEncryptionKey } from "../lib/crypto";
+import type { AuthUser, Env, UserKind } from "../env";
+import { encryptToken, validateTokenEncryptionKey, sha256Base64Url } from "../lib/crypto";
 import { randomBase64Url } from "../lib/encoding";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -82,12 +83,21 @@ function validateCallbackEnv(env: Env): void {
   validateSessionSecret(env);
 }
 
-export async function createLoginUrl(request: Request, env: Env): Promise<string> {
+export function oauthBrowserCookie(request: Request, binding: string): string {
+  const secure = new URL(request.url).protocol === "https:";
+  return `${secure ? "__Host-publicar_oauth" : "publicar_oauth"}=${binding}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${binding ? 600 : 0}${secure ? "; Secure" : ""}`;
+}
+
+export async function createLoginUrl(request: Request, env: Env, browserBinding: string): Promise<string> {
   validateLoginEnv(env);
-  const state = randomBase64Url(32);
+  const state = await sha256Base64Url(browserBinding);
   const nonce = randomBase64Url(32);
   const redirectTo = new URL(request.url).searchParams.get("redirectTo") ?? "/";
-  const safeRedirectTo = redirectTo.startsWith("/") && !redirectTo.startsWith("//") ? redirectTo : "/";
+  let safeRedirectTo = "/";
+  if (redirectTo.startsWith("/") && !redirectTo.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(redirectTo)) {
+    const target = new URL(redirectTo, request.url);
+    if (target.origin === new URL(request.url).origin) safeRedirectTo = target.pathname + target.search + target.hash;
+  }
   const ttl = parsePositiveInteger(env.OAUTH_STATE_TTL_SECONDS, OAUTH_STATE_TTL_SECONDS);
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare("DELETE FROM oauth_states WHERE expires_at <= ?").bind(now).run();
@@ -161,15 +171,29 @@ export async function verifyGoogleIdToken(env: Env, idToken: string, nonce: stri
   return claims;
 }
 
-function assertAllowedDomain(env: Env, claims: IdTokenClaims): void {
+/**
+ * ログイン経路判定。
+ * - 組織ドメイン + hd 一致 → member
+ * - visibility=invite の project に招待あり → guest (hd 不要、gmail.com 可)
+ * - それ以外 → 拒否 (users / token / session を作らない)
+ */
+export async function resolveLoginKind(env: Env, claims: IdTokenClaims): Promise<UserKind> {
   const domains = allowedDomains(env);
   if (domains.length === 0) {
-    return;
+    return "member";
   }
   const domain = emailDomain(claims.email);
-  if (!domain || !domains.includes(domain) || claims.hd?.toLowerCase() !== domain) {
-    throw new Error("Google account domain is not allowed");
+  if (domain && domains.includes(domain) && claims.hd?.toLowerCase() === domain) {
+    return "member";
   }
+  const invited = await hasInviteAccessForLogin(env, {
+    email: claims.email,
+    googleId: claims.sub
+  });
+  if (invited) {
+    return "guest";
+  }
+  throw new Error("Google account domain is not allowed");
 }
 
 export async function handleOAuthCallback(request: Request, env: Env): Promise<{
@@ -183,13 +207,18 @@ export async function handleOAuthCallback(request: Request, env: Env): Promise<{
   if (!code || !state) {
     throw new Error("OAuth callback is missing code or state");
   }
+  const binding = parseCookie(request.headers.get("Cookie")).get(url.protocol === "https:" ? "__Host-publicar_oauth" : "publicar_oauth");
+  if (!binding || !/^[A-Za-z0-9_-]{43}$/.test(binding) || await sha256Base64Url(binding) !== state) throw new Error("OAuth browser does not match");
   const storedState = await consumeOAuthState(env, state);
   if (!storedState) {
     throw new Error("OAuth state is invalid");
   }
   const token = await exchangeCode(request, env, code);
   const claims = await verifyGoogleIdToken(env, token.id_token, storedState.nonce);
-  assertAllowedDomain(env, claims);
+  const disabled = await env.DB.prepare("SELECT 1 FROM users WHERE google_id = ? AND disabled_at IS NOT NULL").bind(claims.sub).first();
+  if (disabled) throw new Error("Google account domain is not allowed");
+  // 経路判定を user / session 作成より前に行い、拒否時は DB に残さない
+  const kind = await resolveLoginKind(env, claims);
   const userInfo = await fetchUserInfo(env, token.access_token);
   if (userInfo.sub !== claims.sub || userInfo.email !== claims.email || userInfo.email_verified === false) {
     throw new Error("OAuth userinfo does not match ID token");
@@ -200,11 +229,13 @@ export async function handleOAuthCallback(request: Request, env: Env): Promise<{
     email: claims.email,
     name: userInfo.name ?? claims.name ?? null,
     avatarUrl: userInfo.picture ?? claims.picture ?? null,
+    kind,
     encryptedAccessToken: await encryptToken(token.access_token, env.TOKEN_ENCRYPTION_KEY),
     encryptedRefreshToken: token.refresh_token
       ? await encryptToken(token.refresh_token, env.TOKEN_ENCRYPTION_KEY)
       : null,
     tokenExpiresAt: expiresAt
   });
+  await claimProjectAccessForUser(env, user.id, user.email);
   return { user, redirectTo: storedState.redirectTo };
 }

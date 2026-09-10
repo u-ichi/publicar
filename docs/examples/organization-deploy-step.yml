@@ -1,0 +1,26 @@
+# 既存の文書生成jobのstepsへ追加する例。単体のworkflowではありません。
+# Variables: PUBLICAR_ENDPOINT, PUBLICAR_PROJECT_ID
+# Secret: 対象プロジェクトのアップロード専用キーをPUBLICAR_DEPLOY_KEYへ保存
+- name: 文書をpublicarへアップロード
+  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  env:
+    PUBLICAR_ENDPOINT: ${{ vars.PUBLICAR_ENDPOINT }}
+    PUBLICAR_PROJECT_ID: ${{ vars.PUBLICAR_PROJECT_ID }}
+    PUBLICAR_DEPLOY_KEY: ${{ secrets.PUBLICAR_DEPLOY_KEY }}
+    PUBLICAR_ARTIFACT: dist/docs.zip
+  shell: bash
+  run: |
+    set -euo pipefail
+    : "${PUBLICAR_ENDPOINT:?}" "${PUBLICAR_PROJECT_ID:?}" "${PUBLICAR_DEPLOY_KEY:?}"
+    test -f "$PUBLICAR_ARTIFACT"
+    curl --fail-with-body --silent --show-error \
+      --retry 3 --retry-delay 2 \
+      --request POST \
+      --header "Authorization: Bearer $PUBLICAR_DEPLOY_KEY" \
+      --header "Idempotency-Key: gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+      --header "Content-Type: application/zip" \
+      --header "X-Publicar-Repository: $GITHUB_REPOSITORY" \
+      --header "X-Publicar-Commit: $GITHUB_SHA" \
+      --header "X-Publicar-Run-Id: $GITHUB_RUN_ID" \
+      --data-binary "@$PUBLICAR_ARTIFACT" \
+      "${PUBLICAR_ENDPOINT%/}/api/v1/projects/$PUBLICAR_PROJECT_ID/deploy?name=docs.zip"

@@ -228,7 +228,22 @@ describe("publicar worker", () => {
     );
     expect(authenticatedOpenResponse.status).toBe(200);
     const authenticatedOpenHtml = await authenticatedOpenResponse.text();
-    expect(authenticatedOpenHtml).toContain("data-comment-mode-toggle");
+    // 壊れると: 開いた直後に範囲選択してもコメントを付けられない (先に「コメントモード」を
+    // ON にする操作が要る状態へ戻る)。期待値は TASK-019 の決定事項 1・2 から転記。
+    expect(authenticatedOpenHtml).toContain('data-comments-toggle aria-pressed="true"');
+    expect(authenticatedOpenHtml).not.toContain("commentModeEnabled");
+    expect(authenticatedOpenHtml).not.toContain("setCommentMode");
+    // 壊れると: コメントの表示/非表示がリロードで元に戻る (TASK-019 決定事項 2)
+    expect(authenticatedOpenHtml).toContain("publicar:hide-comments");
+    // 壊れると: 解決済みコメントが rail のフィルタから外れた時点でどこからも辿れなくなる
+    // (取得が status=open に戻る / ブロック末尾リンクを出さなくなる。決定事項 4・5)
+    expect(authenticatedOpenHtml).toContain('"&status=all"');
+    expect(authenticatedOpenHtml).toContain('if (!highlighted || thread.status === "resolved") addBlockCommentLink(thread, index + 1);');
+    // 壊れると: 既定表示になった rail が本文へ覆いかぶさり、右端が読めなくなる (決定事項 3)。
+    // iframe 自体を狭める方式は採らない。viewport 幅で評価される media query が発火し、
+    // レビュー対象自身のレイアウトが変わってしまう (RHW は 1300px を切ると目次を畳む)。
+    expect(authenticatedOpenHtml).toContain("box-sizing:border-box!important;padding-right:340px!important");
+    expect(authenticatedOpenHtml).not.toContain("grid-template-columns: minmax(0, 1fr) 340px;\\n    .comment-workbench");
     expect(authenticatedOpenHtml).toContain('src="about:blank" data-review-src="/public-site/index.html?__publicar_review=1"');
     expect(authenticatedOpenHtml).toContain("comment-workbench");
     expect(authenticatedOpenHtml).toContain("function clearActiveCommentSelection()");

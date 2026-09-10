@@ -25,7 +25,8 @@ const user: AuthUser = {
   googleId: "google_session",
   email: "session@example.com",
   name: "Session User",
-  avatarUrl: null
+  avatarUrl: null,
+  kind: "member"
 };
 
 describe("KV session cookies", () => {

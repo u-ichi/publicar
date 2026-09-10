@@ -274,20 +274,22 @@ export function page(title: string, body: string): string {
     .comment-popover-actions .button { min-height: 30px; padding: 4px 10px; border-radius: 5px; font-size: 12px; }
     .comment-toolbar { position: fixed; z-index: 99; display: none; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface); box-shadow: 0 4px 16px rgba(0,0,0,.18); padding: 6px; }
     .comment-toolbar.open { display: block; }
-    .comment-mode-button { min-height: 31px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; background: transparent; color: var(--tx-2); font-size: 13px; font-weight: 600; transition: background .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
-    .comment-mode-button:hover { background: var(--surface-hover); border-color: var(--border-2); }
-    .comment-mode-button[aria-pressed="true"] { color: #fff; background: var(--green); border-color: var(--green); }
+    .comments-toggle-button { min-height: 31px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; background: transparent; color: var(--tx-2); font-size: 13px; font-weight: 600; transition: background .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
+    .comments-toggle-button:hover { background: var(--surface-hover); border-color: var(--border-2); }
+    .comments-toggle-button[aria-pressed="true"] { color: #fff; background: var(--green); border-color: var(--green); }
     .comment-workbench { position: relative; height: calc(100vh - 56px); min-height: 0; overflow: hidden; background: var(--bg); }
     .comment-workbench-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
-    .comment-workbench .review-rail { position: fixed; z-index: 80; top: 56px; right: 0; bottom: 0; width: min(340px, 100vw); min-height: 0; border-top: 0; border-bottom: 0; border-right: 0; border-radius: 0; box-shadow: -16px 0 32px rgba(15, 23, 42, .12); transform: translateX(100%); visibility: hidden; pointer-events: none; transition: transform .2s ease, visibility .2s ease; }
-    .comment-workbench.comment-rail-open .review-rail { transform: translateX(0); visibility: visible; pointer-events: auto; }
+    /* rail は iframe に重ねる。iframe を狭めると中の HTML の media query が発火し、
+       レビュー対象自身のレイアウト (RHW なら目次) が畳まれてしまうため。
+       本文が rail の下に潜らないよう、iframe 内へ padding を注入して逃がす */
+    .comment-workbench .review-rail { position: fixed; z-index: 80; top: 56px; right: 0; bottom: 0; width: 340px; min-height: 0; border-top: 0; border-bottom: 0; border-right: 0; border-radius: 0; box-shadow: -16px 0 32px rgba(15, 23, 42, .12); }
+    .comment-workbench.hide-comments .review-rail { display: none; }
     @keyframes popIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
     @media (max-width: 920px) {
       .review-layout { grid-template-columns: 1fr; }
       .review-frame { height: 62vh; }
       .review-rail { min-height: 360px; }
-      .comment-workbench .review-rail { top: auto; left: 0; width: 100vw; max-height: 72vh; border-left: 0; border-top: 1px solid var(--border); transform: translateY(100%); box-shadow: 0 -16px 32px rgba(15,23,42,.12); }
-      .comment-workbench.comment-rail-open .review-rail { transform: translateY(0); }
+      .comment-workbench .review-rail { top: auto; left: 0; width: 100vw; height: 42vh; min-height: 0; border-left: 0; border-top: 1px solid var(--border); box-shadow: 0 -16px 32px rgba(15,23,42,.12); }
     }
     dialog { width: min(520px, calc(100vw - 32px)); border: 1px solid var(--border-2); border-radius: 12px; padding: 0; background: var(--surface); color: var(--tx); }
     dialog::backdrop { background: rgba(0,0,0,.64); }
@@ -358,7 +360,7 @@ export function shell(user: AuthUser, content: string, options: ShellOptions = {
         <span class="email">${escapeHtml(user.email)}</span>
         <span aria-hidden="true">⌄</span>
         <div class="dropdown">
-          <span>API キー管理 近日対応</span>
+          ${user.kind === "guest" ? "" : "<span>API キー管理 近日対応</span>"}
           <a href="/auth/logout">ログアウト</a>
         </div>
       </div>

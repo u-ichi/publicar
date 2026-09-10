@@ -52,7 +52,7 @@ function projectFileUrl(project: Project, path: string, query?: string): string 
 export function commentWorkbenchPage(user: AuthUser, project: Project, path: string): string {
   const reviewFileUrl = projectFileUrl(project, path, "__publicar_review=1");
   const commentIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
-  const headerControls = `<button class="comment-mode-button" type="button" data-comment-mode-toggle aria-pressed="false">${commentIcon}<span>コメント</span></button>`;
+  const headerControls = `<button class="comments-toggle-button" type="button" data-comments-toggle aria-pressed="true">${commentIcon}<span>コメント</span></button>`;
   return page(
     `${project.title} - publicar`,
     `<script>
@@ -71,7 +71,7 @@ if (window.frameElement?.id === "review-frame") {
       <span class="review-rail-title">コメント <span class="muted" id="review-count">0</span></span>
       <span class="review-rail-tools"><select id="comment-status-filter" aria-label="コメントフィルタ"><option value="open">未解決</option><option value="all">すべて</option><option value="resolved">解決済み</option></select><button class="review-close" type="button" data-close-review-rail aria-label="コメントを閉じる">×</button></span>
     </div>
-    <div class="review-comments" id="review-comments"><div class="empty">コメントモードを有効にしてください</div></div>
+    <div class="review-comments" id="review-comments"><div class="empty">読み込み中...</div></div>
   </aside>
   <div class="comment-toolbar" id="comment-toolbar"><button class="button" type="button" id="open-comment-composer">コメント</button></div>
   <div class="comment-popover comment-composer" id="comment-popover">
@@ -105,7 +105,7 @@ const commentBody = qs("#comment-body");
 const saveCommentButton = qs("#save-comment");
 const commentStatus = qs("#comment-status");
 const workbench = qs("[data-comment-workbench]");
-const modeButton = qs("[data-comment-mode-toggle]");
+const commentsToggle = qs("[data-comments-toggle]");
 let reviewDoc = null;
 let comments = [];
 let selected = null;
@@ -124,6 +124,7 @@ let lastObservedParentHash = "";
 const lastActiveCommentByFrameHash = new Map();
 const COMMENT_COMPOSER_DELAY_MS = 360;
 const FRAME_HASH_SYNC_DELAYS_MS = [0, 50, 200, 600, 1200];
+const COMMENTS_HIDDEN_KEY = "publicar:hide-comments";
 
 function apiBase() {
   return "/api/v1/projects/" + encodeURIComponent(reviewProjectId);
@@ -146,49 +147,59 @@ function formatTime(value) {
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-function commentModeEnabled() {
-  return !workbench || workbench.classList.contains("comment-mode");
+function commentsVisible() {
+  return !workbench || !workbench.classList.contains("hide-comments");
 }
-function openCommentsRail() {
-  workbench?.classList.add("comment-rail-open");
+function applyCommentsVisibility(visible) {
+  workbench?.classList.toggle("hide-comments", !visible);
+  reviewDoc?.documentElement.classList.toggle("publicar-comments-hidden", !visible);
+  commentsToggle?.setAttribute("aria-pressed", visible ? "true" : "false");
 }
-function closeCommentsRail() {
-  workbench?.classList.remove("comment-rail-open");
-}
-function commentsRailOpen() {
-  return Boolean(workbench?.classList.contains("comment-rail-open"));
-}
-function setCommentMode(enabled) {
-  if (!workbench || !modeButton) return;
-  workbench.classList.toggle("comment-mode", enabled);
-  modeButton.setAttribute("aria-pressed", enabled ? "true" : "false");
-  const label = modeButton.querySelector("span");
-  if (label) label.textContent = enabled ? "コメント中" : "コメント";
-  toolbar.classList.remove("open");
-  popover.classList.remove("open");
-  if (!enabled) {
-    closeCommentsRail();
-    clearHighlights();
-    commentsRoot.innerHTML = '<div class="empty">コメントモードを有効にしてください</div>';
-    countLabel.textContent = "0";
+function readStoredCommentsHidden() {
+  try {
+    return localStorage.getItem(COMMENTS_HIDDEN_KEY) === "true";
+  } catch (_error) {
+    // Private browsing can throw on access; fall back to showing comments.
+    return false;
   }
-  if (enabled) loadComments();
 }
-function handleCommentModeToggle() {
-  if (!commentModeEnabled()) {
-    setCommentMode(true);
-    openCommentsRail();
-    return;
+function setCommentsVisible(visible) {
+  applyCommentsVisibility(visible);
+  try {
+    localStorage.setItem(COMMENTS_HIDDEN_KEY, visible ? "false" : "true");
+  } catch (_error) {
+    // Persisting the choice is best effort; the toggle still works this session.
   }
-  setCommentMode(false);
+  if (!visible) {
+    clearSelectionDraft();
+    clearActiveCommentSelection();
+  }
+}
+function showComments() {
+  if (!commentsVisible()) setCommentsVisible(true);
+}
+function toggleComments() {
+  setCommentsVisible(!commentsVisible());
 }
 function installReviewStyles() {
   if (!reviewDoc || reviewDoc.getElementById("publicar-review-style")) return;
   const style = reviewDoc.createElement("style");
   style.id = "publicar-review-style";
   style.textContent = ".publicar-cx{background:var(--highlight,rgba(210,153,34,.18));border-bottom:2px solid var(--highlight-border,rgba(210,153,34,.5));cursor:pointer;transition:background .2s ease}.publicar-cx:hover{background:rgba(210,153,34,.12)}.publicar-cx[data-status='resolved']{background:transparent;border-bottom:1px dashed var(--green,#22c55e)}.publicar-cx.active{background:var(--highlight-active,rgba(210,153,34,.35));outline:2px solid var(--accent,#3b82f6);outline-offset:2px}";
+  // Links sit at the end of their block in normal flow. Absolute positioning
+  // was rejected because it covers the body text it is meant to annotate.
+  // Colours stay on border/background and the text inherits, so the links keep
+  // enough contrast on both light and dark review documents.
+  style.textContent += ".publicar-cxlinks{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.publicar-cxlink{display:inline-flex;align-items:center;gap:3px;padding:1px 8px 1px 6px;border:1px solid rgba(210,153,34,.55);border-radius:999px;background:rgba(210,153,34,.16);color:inherit;font:inherit;font-size:11px;line-height:1.6;cursor:pointer;vertical-align:middle;opacity:.85}.publicar-cxlink::after{content:attr(data-label)}.publicar-cxlink>svg{width:11px;height:11px;flex:none}.publicar-cxlink:hover{opacity:1}.publicar-cxlink[data-status='resolved']{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.16)}.publicar-cxlink.active{opacity:1;outline:2px solid var(--accent,#3b82f6);outline-offset:2px}";
+  style.textContent += "html.publicar-comments-hidden .publicar-cx{background:transparent;border-bottom:0;cursor:default}html.publicar-comments-hidden .publicar-cxlinks{display:none}";
   if (workbench) {
     style.textContent += "html,body{width:100%!important;max-width:none!important}body{margin-left:0!important;margin-right:0!important}body>*,#root,#app,#__next,.app,.app-shell,.page,.page-shell,.layout,.content,.main,.container,.workspace,.schema-browser,.schema-layout,.registry-layout{max-width:none!important;width:100%!important;margin-left:0!important;margin-right:0!important}";
+    // rail は iframe に重なるので、その幅ぶんだけ本文を内側へ寄せる。iframe 自体を
+    // 狭めると viewport 幅で評価される media query が発火し、レビュー対象の
+    // レイアウトが変わってしまう (RHW は 1300px を切ると目次を畳む)。
+    // box-sizing がないと、上で body に効かせている width:100% が content 幅として
+    // 解釈され、padding を足したぶんだけ body が viewport からはみ出す。
+    style.textContent += "html:not(.publicar-comments-hidden) body{box-sizing:border-box!important;padding-right:340px!important}@media (max-width:920px){html:not(.publicar-comments-hidden) body{padding-right:0!important;padding-bottom:42vh!important}}";
   }
   (reviewDoc.head || reviewDoc.documentElement).appendChild(style);
 }
@@ -236,7 +247,7 @@ function clearActiveCommentSelection() {
     routeHighlightTimer = null;
   }
   qsa(".review-card.active").forEach((card) => card.classList.remove("active"));
-  reviewDoc?.querySelectorAll(".publicar-cx.active").forEach((el) => el.classList.remove("active"));
+  reviewDoc?.querySelectorAll(".publicar-cx.active, .publicar-cxlink.active").forEach((el) => el.classList.remove("active"));
 }
 function rememberActiveComment(thread) {
   const hash = threadFrameHash(thread);
@@ -308,7 +319,11 @@ function textNodesIn(root, includeHighlights = false) {
   const nodes = [];
   const walker = reviewDoc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
-      if (!node.nodeValue || (!includeHighlights && node.parentElement?.closest(".publicar-cx"))) return NodeFilter.FILTER_REJECT;
+      if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+      // Injected link markup must never count as document text, or the stored
+      // character offsets would drift every time a link is added.
+      if (node.parentElement?.closest(".publicar-cxlinks")) return NodeFilter.FILTER_REJECT;
+      if (!includeHighlights && node.parentElement?.closest(".publicar-cx")) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
   });
@@ -367,7 +382,7 @@ function selectionAnchor(block, range) {
   };
 }
 function captureSelection() {
-  if (!commentModeEnabled()) return;
+  if (!commentsVisible()) return;
   if (!reviewDoc) return;
   ensureReviewBlocks();
   const selection = frame.contentWindow?.getSelection();
@@ -528,14 +543,17 @@ function highlightThread(thread) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
   let pos = 0;
   let done = false;
-  for (const node of textNodesIn(block)) {
+  // Walk highlighted text too: start/end come from block.textContent, so skipping
+  // earlier highlights here would shift every later comment in the same block by
+  // the length of the text already wrapped.
+  for (const node of textNodesIn(block, true)) {
     const text = node.nodeValue || "";
     const nodeStart = pos;
     const nodeEnd = pos + text.length;
     const overlapStart = Math.max(start, nodeStart);
     const overlapEnd = Math.min(end, nodeEnd);
     pos = nodeEnd;
-    if (overlapStart < overlapEnd) {
+    if (overlapStart < overlapEnd && !node.parentElement?.closest(".publicar-cx")) {
       done = wrapSlice(node, overlapStart - nodeStart, overlapEnd - nodeStart, thread) || done;
     }
   }
@@ -544,11 +562,64 @@ function highlightThread(thread) {
   }
   return done;
 }
+function clearBlockCommentLinks() {
+  reviewDoc?.querySelectorAll("[data-publicar-cxlinks]").forEach((container) => container.remove());
+}
+function blockForThread(thread) {
+  const marker = reviewDoc.querySelector('.publicar-cx[data-comment="' + CSS.escape(thread.id) + '"]');
+  if (marker) return closestBlock(marker);
+  const blockId = thread.anchor?.blockId;
+  const byId = blockId ? reviewDoc.querySelector('[data-review-block="' + CSS.escape(String(blockId)) + '"]') : null;
+  if (byId) return byId;
+  return findAnchorInRenderedText(thread.anchor || {}, thread)?.block || null;
+}
+function ensureBlockLinkContainer(block) {
+  let container = block.querySelector(":scope > [data-publicar-cxlinks]");
+  if (!container) {
+    // <span> keeps the container valid inside inline-only blocks such as <p>.
+    container = reviewDoc.createElement("span");
+    container.className = "publicar-cxlinks";
+    container.setAttribute("data-publicar-cxlinks", "");
+    block.appendChild(container);
+  }
+  return container;
+}
+function addBlockCommentLink(thread, number) {
+  const block = blockForThread(thread);
+  if (!block) return;
+  const link = reviewDoc.createElement("button");
+  link.type = "button";
+  link.className = "publicar-cxlink";
+  link.setAttribute("data-comment", thread.id);
+  link.setAttribute("data-status", thread.status);
+  // The number is drawn through CSS content so it stays out of textContent and
+  // cannot shift the character offsets that anchor the highlights.
+  link.setAttribute("data-label", String(number));
+  const label = (thread.status === "resolved" ? "解決済みコメント " : "コメント ") + number;
+  link.setAttribute("aria-label", label);
+  link.title = label;
+  link.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3.5h10v7H8l-3 2.5V10.5H3z"></path></svg>';
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    activateComment(thread.id, true);
+  });
+  ensureBlockLinkContainer(block).appendChild(link);
+}
 function renderHighlights() {
   suppressHighlightObserver = true;
+  clearBlockCommentLinks();
   clearHighlights();
   ensureReviewBlocks();
-  comments.forEach(highlightThread);
+  comments.forEach((thread, index) => {
+    const frameHash = threadFrameHash(thread);
+    if (frameHash && currentFrameHash() !== frameHash) return;
+    const highlighted = highlightThread(thread);
+    // Resolved threads keep their faint underline but also get a link, so they
+    // stay reachable while the rail filter hides them. Threads whose anchor no
+    // longer resolves would otherwise leave no trace in the document at all.
+    if (!highlighted || thread.status === "resolved") addBlockCommentLink(thread, index + 1);
+  });
   if (activeCommentId) setActiveHighlight(activeCommentId);
   window.setTimeout(() => {
     suppressHighlightObserver = false;
@@ -561,8 +632,8 @@ function renderCurrentRouteHighlights(scrollCard = false) {
   return isFrameRouteHash(hash) ? restoreActiveCommentForRoute(hash, scrollCard) : true;
 }
 function setActiveHighlight(id) {
-  reviewDoc?.querySelectorAll(".publicar-cx.active").forEach((el) => el.classList.remove("active"));
-  reviewDoc?.querySelectorAll('.publicar-cx[data-comment="' + CSS.escape(id) + '"]').forEach((el) => el.classList.add("active"));
+  reviewDoc?.querySelectorAll(".publicar-cx.active, .publicar-cxlink.active").forEach((el) => el.classList.remove("active"));
+  reviewDoc?.querySelectorAll('.publicar-cx[data-comment="' + CSS.escape(id) + '"], .publicar-cxlink[data-comment="' + CSS.escape(id) + '"]').forEach((el) => el.classList.add("active"));
 }
 function commentHash(id) {
   return "#comment-" + encodeURIComponent(id);
@@ -607,10 +678,10 @@ function anchorWithLocation(anchor) {
 function scrollToCommentTarget(thread, remainingRetries) {
   if (!reviewDoc || !thread) return false;
   ensureReviewBlocks();
-  if (!reviewDoc.querySelector('.publicar-cx[data-comment="' + CSS.escape(thread.id) + '"]')) {
+  if (!reviewDoc.querySelector('.publicar-cx[data-comment="' + CSS.escape(thread.id) + '"], .publicar-cxlink[data-comment="' + CSS.escape(thread.id) + '"]')) {
     renderHighlights();
   }
-  const marker = reviewDoc.querySelector('.publicar-cx[data-comment="' + CSS.escape(thread.id) + '"]');
+  const marker = reviewDoc.querySelector('.publicar-cx[data-comment="' + CSS.escape(thread.id) + '"], .publicar-cxlink[data-comment="' + CSS.escape(thread.id) + '"]');
   const blockId = thread.anchor?.blockId;
   const block = blockId ? reviewDoc.querySelector('[data-review-block="' + CSS.escape(String(blockId)) + '"]') : null;
   const target = marker || block;
@@ -661,19 +732,43 @@ function activateComment(id, scrollCard, scrollTarget = false) {
     history.replaceState(null, "", targetParentUrl);
     lastObservedParentHash = parentRouteHash();
   });
-  openCommentsRail();
+  showComments();
+  revealThreadInRail(thread);
   setActiveCommentSelection(thread, scrollCard);
   if (scrollTarget) restoreFrameLocation(thread, () => {
     scrollToCommentTarget(thread, 10);
   });
 }
+function currentCommentFilter() {
+  return qs("#comment-status-filter").value || "open";
+}
+function threadMatchesFilter(thread) {
+  const filter = currentCommentFilter();
+  if (filter === "open") return thread.status !== "resolved";
+  if (filter === "resolved") return thread.status === "resolved";
+  return true;
+}
+function applyCommentFilter() {
+  let visibleCount = 0;
+  comments.forEach((thread) => {
+    const visible = threadMatchesFilter(thread);
+    if (visible) visibleCount += 1;
+    const card = qs('[data-comment-card="' + CSS.escape(thread.id) + '"]');
+    if (card) card.hidden = !visible;
+  });
+  countLabel.textContent = String(visibleCount);
+  const empty = qs("[data-comments-empty]");
+  if (empty) empty.hidden = visibleCount > 0;
+}
+function revealThreadInRail(thread) {
+  if (threadMatchesFilter(thread)) return;
+  // Opening a resolved thread from its end-of-block link must not land on a
+  // hidden card, so widen the filter instead of leaving the rail blank.
+  qs("#comment-status-filter").value = "all";
+  applyCommentFilter();
+}
 function renderComments() {
-  countLabel.textContent = String(comments.length);
   commentsRoot.innerHTML = "";
-  if (!comments.length) {
-    commentsRoot.innerHTML = '<div class="empty">コメントはありません</div>';
-    return;
-  }
   comments.forEach((thread) => {
     const card = document.createElement("article");
     card.className = "review-card";
@@ -702,6 +797,12 @@ function renderComments() {
     card.querySelector("[data-delete-comment]").addEventListener("click", () => deleteThread(thread));
     commentsRoot.appendChild(card);
   });
+  const empty = document.createElement("div");
+  empty.className = "empty";
+  empty.dataset.commentsEmpty = "";
+  empty.textContent = "コメントはありません";
+  commentsRoot.appendChild(empty);
+  applyCommentFilter();
 }
 function updateComposerButton() {
   if (!saveCommentButton) return;
@@ -711,8 +812,9 @@ function isSubmitShortcut(event) {
   return event.key === "Enter" && (event.metaKey || event.ctrlKey);
 }
 async function loadComments() {
-  const status = qs("#comment-status-filter").value || "open";
-  const response = await fetch(apiBase() + "/comments?path=" + encodeURIComponent(reviewPath) + "&status=" + encodeURIComponent(status));
+  // Always fetch every thread: resolved ones must stay available for the
+  // end-of-block links even when the rail filter hides them.
+  const response = await fetch(apiBase() + "/comments?path=" + encodeURIComponent(reviewPath) + "&status=all");
   if (!response.ok) return;
   const data = await response.json();
   comments = data.threads || [];
@@ -752,10 +854,7 @@ async function saveComment() {
   commentBody.value = "";
   setStatus(commentStatus, "");
   updateComposerButton();
-  if (workbench && !commentModeEnabled()) {
-    setCommentMode(true);
-  }
-  openCommentsRail();
+  showComments();
   await loadComments();
   if (!savedAnchor.frameHash || currentFrameHash() === savedAnchor.frameHash) {
     activateComment(data.thread.id, true, true);
@@ -771,7 +870,7 @@ async function sendReply(thread, textarea) {
   });
   if (response.ok) {
     textarea.value = "";
-    openCommentsRail();
+    showComments();
     await loadComments();
     activateComment(thread.id, false, false);
   }
@@ -970,6 +1069,7 @@ function initializeReviewFrame() {
     reviewDoc = frame.contentDocument;
     if (!reviewDoc) throw new Error("frame document is not accessible");
     installReviewStyles();
+    applyCommentsVisibility(commentsVisible());
     ensureReviewBlocks();
     installHighlightObserver();
     installFrameHashSync();
@@ -1010,9 +1110,10 @@ commentBody.addEventListener("keydown", (event) => {
   event.preventDefault();
   saveComment();
 });
-qs("#comment-status-filter").addEventListener("change", loadComments);
-modeButton?.addEventListener("click", handleCommentModeToggle);
-qs("[data-close-review-rail]")?.addEventListener("click", closeCommentsRail);
+qs("#comment-status-filter").addEventListener("change", applyCommentFilter);
+applyCommentsVisibility(!readStoredCommentsHidden());
+commentsToggle?.addEventListener("click", toggleComments);
+qs("[data-close-review-rail]")?.addEventListener("click", () => setCommentsVisible(false));
 window.addEventListener("resize", () => {
   clearCommentComposerTimer();
   toolbar.classList.remove("open");

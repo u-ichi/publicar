@@ -1,8 +1,31 @@
 import type { Env } from "../env";
 import { downloadDriveFile } from "../storage/drive";
 import { getValidAccessToken } from "./token-refresh";
+import { getProjectStorage, downloadWithServiceAccount } from "../storage/service-account-drive";
+import { withServiceAccount } from "../auth/service-account";
+import { assertStorageAccount, verifyServiceAccountLocation } from "../storage/service-account-drive";
 
 type DriveDownloadResult = Awaited<ReturnType<typeof downloadDriveFile>>;
+
+export async function withProjectDriveAuth<T>(env: Env, projectId: string, userId: string, fn: (token: string) => Promise<T>): Promise<T> {
+  const storage = await getProjectStorage(env, projectId);
+  if (!storage?.storage_service_account) return withDriveAuthRetry(env, userId, fn);
+  assertStorageAccount(env, storage.storage_service_account);
+  if (!storage.drive_folder_id) throw new Error("project_drive_folder_required");
+  return withServiceAccount(env, async (token) => {
+    await verifyServiceAccountLocation(env, token, storage.drive_folder_id!);
+    return fn(token);
+  });
+}
+
+export async function downloadProjectFileWithRetry(env: Env, projectId: string, userId: string, fileId: string): Promise<DriveDownloadResult> {
+  const storage = await getProjectStorage(env, projectId);
+  if (storage?.storage_service_account) {
+    if (!storage.drive_folder_id) throw new Error("project_drive_folder_required");
+    return downloadWithServiceAccount(env, storage.storage_service_account, storage.drive_folder_id, fileId);
+  }
+  return downloadDriveFileWithRetry(env, userId, fileId);
+}
 
 type DriveRetryOptions = {
   initialAccessToken?: string;

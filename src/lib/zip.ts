@@ -1,4 +1,6 @@
-import { unzipSync } from "fflate";
+import { Unzip, UnzipInflate } from "fflate";
+import { normalizeFilePath } from "../db/projects";
+import { UploadInputError } from "./upload-body";
 
 export type ZipEntry = {
   path: string;
@@ -48,23 +50,48 @@ function isOsMetadata(path: string): boolean {
   );
 }
 
-export function extractZip(buffer: ArrayBuffer): ZipEntry[] {
-  const files = unzipSync(new Uint8Array(buffer));
+export function extractZip(buffer: ArrayBuffer, limits = { bytes: 20 * 1024 * 1024, files: 200 }): ZipEntry[] {
   const entries: ZipEntry[] = [];
-
-  for (const [path, data] of Object.entries(files)) {
-    if (path.endsWith("/")) {
-      continue;
-    }
-    if (isOsMetadata(path)) {
-      continue;
-    }
-    entries.push({
-      path,
-      data,
-      mimeType: mimeFromPath(path)
-    });
+  const paths = new Set<string>();
+  let bytes = 0;
+  let count = 0;
+  let completed = 0;
+  const unzip = new Unzip((file) => {
+    count++;
+    if (count > limits.files) throw new UploadInputError("too_many_zip_entries", 413);
+    const path = normalizeFilePath(file.name.replace(/\/$/, ""));
+    if (!path || paths.has(path) || file.name.startsWith("/") || file.name.includes("\\")) throw new UploadInputError("invalid_zip_path");
+    paths.add(path);
+    if (file.originalSize !== undefined && file.originalSize > limits.bytes - bytes) throw new UploadInputError("expanded_upload_too_large", 413);
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    file.ondata = (error, data, final) => {
+      if (error) throw new UploadInputError("invalid_zip");
+      bytes += data.byteLength;
+      size += data.byteLength;
+      if (bytes > limits.bytes) throw new UploadInputError("expanded_upload_too_large", 413);
+      chunks.push(data);
+      if (final) {
+        completed++;
+        if (file.name.endsWith("/") || isOsMetadata(path)) return;
+        const body = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.length; }
+        entries.push({ path, data: body, mimeType: mimeFromPath(path) });
+      }
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+  const input = new Uint8Array(buffer);
+  // 圧縮データを小分けに渡し、全量を展開する前に上限を判定する。
+  try {
+    for (let offset = 0; offset < input.length; offset += 4096) unzip.push(input.subarray(offset, offset + 4096), offset + 4096 >= input.length);
+  } catch (error) {
+    if (error instanceof UploadInputError) throw error;
+    throw new UploadInputError("invalid_zip");
   }
+  if (completed !== count) throw new UploadInputError("invalid_zip");
   return entries;
 }
 

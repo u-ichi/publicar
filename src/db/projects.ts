@@ -323,37 +323,27 @@ export async function updateProject(
     driveFolderId?: string | null;
   }
 ): Promise<Project | null> {
-  const current = await getProjectById(env, id);
-  if (!current) {
-    return null;
+  const fields: Array<[string, string | null]> = [];
+  if (input.alias !== undefined) fields.push(["alias", input.alias]);
+  if (input.title !== undefined) fields.push(["title", input.title]);
+  if (input.description !== undefined) fields.push(["description", input.description]);
+  if (input.visibility !== undefined) fields.push(["visibility", input.visibility]);
+  if (input.allowedDomains !== undefined) fields.push(["allowed_domains", JSON.stringify(input.allowedDomains)]);
+  if (input.allowedGroups !== undefined) fields.push(["allowed_groups", JSON.stringify(input.allowedGroups)]);
+  if (input.driveFolderId !== undefined) fields.push(["drive_folder_id", input.driveFolderId]);
+  if (input.entryPath !== undefined) {
+    const path = normalizeFilePath(input.entryPath);
+    if (!path) throw new Error("Invalid entry_path");
+    fields.push(["entry_path", path]);
   }
-  const entryPath = input.entryPath === undefined ? current.entryPath : normalizeFilePath(input.entryPath);
-  if (!entryPath) {
-    throw new Error("Invalid entry_path");
-  }
+  if (!fields.length) return getProjectById(env, id);
   const row = await env.DB.prepare(
-    `UPDATE projects SET
-      alias = ?,
-      title = ?,
-      description = ?,
-      visibility = ?,
-      allowed_domains = ?,
-      allowed_groups = ?,
-      entry_path = ?,
-      drive_folder_id = ?,
-      updated_at = datetime('now')
+    `UPDATE projects SET ${fields.map(([column]) => `${column} = ?`).join(", ")}, updated_at = datetime('now')
      WHERE id = ?
      RETURNING *, NULL as role`
   )
     .bind(
-      input.alias ?? current.alias,
-      input.title ?? current.title,
-      input.description === undefined ? current.description : input.description,
-      input.visibility ?? current.visibility,
-      JSON.stringify(input.allowedDomains ?? current.allowedDomains),
-      JSON.stringify(input.allowedGroups ?? current.allowedGroups),
-      entryPath,
-      input.driveFolderId === undefined ? current.driveFolderId : input.driveFolderId,
+      ...fields.map(([, value]) => value),
       id
     )
     .first<ProjectRow>();
@@ -362,6 +352,214 @@ export async function updateProject(
 
 export async function deleteProject(env: Env, id: string): Promise<void> {
   await env.DB.prepare("DELETE FROM projects WHERE id = ?").bind(id).run();
+}
+
+export type DriveAccessRole = "reader" | "commenter" | "writer";
+
+export type ProjectAccess = {
+  id: string;
+  projectId: string;
+  email: string;
+  grantedBy: string;
+  userId: string | null;
+  driveRole: DriveAccessRole | null;
+  drivePermissionId: string | null;
+  driveError: string | null;
+  createdAt: string;
+};
+
+type ProjectAccessRow = {
+  id: string;
+  project_id: string;
+  email: string;
+  granted_by: string;
+  user_id: string | null;
+  drive_role: string | null;
+  drive_permission_id: string | null;
+  drive_error: string | null;
+  created_at: string;
+};
+
+const PROJECT_ACCESS_SELECT =
+  "id, project_id, email, granted_by, user_id, drive_role, drive_permission_id, drive_error, created_at";
+
+function asDriveAccessRole(value: string | null): DriveAccessRole | null {
+  if (value === "reader" || value === "commenter" || value === "writer") {
+    return value;
+  }
+  return null;
+}
+
+function rowToProjectAccess(row: ProjectAccessRow): ProjectAccess {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    email: row.email,
+    grantedBy: row.granted_by,
+    userId: row.user_id,
+    driveRole: asDriveAccessRole(row.drive_role),
+    drivePermissionId: row.drive_permission_id,
+    driveError: row.drive_error,
+    createdAt: row.created_at
+  };
+}
+
+export function isValidInviteEmail(email: string): boolean {
+  if (email.length < 3 || email.length > 254) {
+    return false;
+  }
+  // API 側の形式検証 (client type=email に依存しない)
+  return /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(email);
+}
+
+export function isDriveAccessRole(value: unknown): value is DriveAccessRole {
+  return value === "reader" || value === "commenter" || value === "writer";
+}
+
+export async function listProjectAccess(env: Env, projectId: string): Promise<ProjectAccess[]> {
+  const result = await env.DB.prepare(
+    `SELECT ${PROJECT_ACCESS_SELECT}
+     FROM project_access
+     WHERE project_id = ?
+     ORDER BY created_at ASC`
+  )
+    .bind(projectId)
+    .all<ProjectAccessRow>();
+  return result.results.map(rowToProjectAccess);
+}
+
+export async function getProjectAccess(
+  env: Env,
+  projectId: string,
+  accessId: string
+): Promise<ProjectAccess | null> {
+  const row = await env.DB.prepare(
+    `SELECT ${PROJECT_ACCESS_SELECT}
+     FROM project_access
+     WHERE project_id = ? AND id = ?`
+  )
+    .bind(projectId, accessId)
+    .first<ProjectAccessRow>();
+  return row ? rowToProjectAccess(row) : null;
+}
+
+export async function upsertProjectAccess(
+  env: Env,
+  input: {
+    projectId: string;
+    email: string;
+    grantedBy: string;
+    driveRole?: DriveAccessRole;
+  }
+): Promise<ProjectAccess> {
+  const email = input.email.trim().toLowerCase();
+  if (!isValidInviteEmail(email)) {
+    throw new Error("Invalid invite email");
+  }
+  const driveRole = input.driveRole ?? "reader";
+  const row = await env.DB.prepare(
+    `INSERT INTO project_access (id, project_id, email, granted_by, drive_role)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id, email) DO UPDATE SET
+       granted_by = excluded.granted_by,
+       drive_role = excluded.drive_role
+     RETURNING ${PROJECT_ACCESS_SELECT}`
+  )
+    .bind(randomId("pa"), input.projectId, email, input.grantedBy, driveRole)
+    .first<ProjectAccessRow>();
+  if (!row) {
+    throw new Error("Failed to upsert project access");
+  }
+  return rowToProjectAccess(row);
+}
+
+export async function updateProjectAccessDriveState(
+  env: Env,
+  accessId: string,
+  state: { drivePermissionId: string | null; driveError: string | null }
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE project_access SET
+      drive_permission_id = ?,
+      drive_error = ?
+     WHERE id = ?`
+  )
+    .bind(state.drivePermissionId, state.driveError, accessId)
+    .run();
+}
+
+export async function deleteProjectAccess(env: Env, projectId: string, accessId: string): Promise<boolean> {
+  const result = await env.DB.prepare("DELETE FROM project_access WHERE project_id = ? AND id = ?")
+    .bind(projectId, accessId)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/**
+ * 招待経路ログイン判定: いずれかの project に有効な招待があるか。
+ * 招待は visibility に依らない追加許可なので、visibility での絞り込みはしない
+ * (domain 認証の project に社外 1 名を招く用途が主目的)。
+ */
+export async function hasInviteAccessForLogin(
+  env: Env,
+  input: { email: string; googleId: string }
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT pa.id
+     FROM project_access pa
+     WHERE (pa.user_id IS NULL AND lower(pa.email) = lower(?))
+        OR pa.user_id = (SELECT id FROM users WHERE google_id = ?)
+     LIMIT 1`
+  )
+    .bind(input.email, input.googleId)
+    .first<{ id: string }>();
+  return !!row;
+}
+
+/**
+ * ログイン成功時: lower(email) 一致かつ未 claim の行を user に claim。
+ * 同一 (project_id, user_id) が既にあれば未 claim 行を DELETE して統合する。
+ */
+export async function claimProjectAccessForUser(env: Env, userId: string, email: string): Promise<void> {
+  const unclaimed = await env.DB.prepare(
+    `SELECT id, project_id FROM project_access
+     WHERE user_id IS NULL AND lower(email) = lower(?)`
+  )
+    .bind(email)
+    .all<{ id: string; project_id: string }>();
+
+  for (const row of unclaimed.results) {
+    const existing = await env.DB.prepare(
+      "SELECT id FROM project_access WHERE project_id = ? AND user_id = ?"
+    )
+      .bind(row.project_id, userId)
+      .first<{ id: string }>();
+    if (existing) {
+      await env.DB.prepare("DELETE FROM project_access WHERE id = ?").bind(row.id).run();
+    } else {
+      await env.DB.prepare("UPDATE project_access SET user_id = ? WHERE id = ?")
+        .bind(userId, row.id)
+        .run();
+    }
+  }
+}
+
+/**
+ * 個別招待 (project_access) を持つか。claim 済みは user_id、未 claim 行は email で照合する。
+ */
+export async function hasProjectAccessGrant(env: Env, projectId: string, user: AuthUser): Promise<boolean> {
+  const byUser = await env.DB.prepare("SELECT id FROM project_access WHERE project_id = ? AND user_id = ?")
+    .bind(projectId, user.id)
+    .first<{ id: string }>();
+  if (byUser) {
+    return true;
+  }
+  const byEmail = await env.DB.prepare(
+    "SELECT id FROM project_access WHERE project_id = ? AND user_id IS NULL AND lower(email) = lower(?)"
+  )
+    .bind(projectId, user.email)
+    .first<{ id: string }>();
+  return !!byEmail;
 }
 
 export async function canViewProject(env: Env, project: Project, user: AuthUser | null): Promise<boolean> {
@@ -375,15 +573,14 @@ export async function canViewProject(env: Env, project: Project, user: AuthUser 
   if (role) {
     return true;
   }
+  // 個別招待は visibility に依らない追加許可。
+  // domain 認証を保ったまま社外コラボレーターを 1 名ずつ足す用途がこれに当たる。
+  if (await hasProjectAccessGrant(env, project.id, user)) {
+    return true;
+  }
   if (project.visibility === "domain") {
     const domain = emailDomain(user.email);
     return !!domain && project.allowedDomains.map((item) => item.toLowerCase()).includes(domain);
-  }
-  if (project.visibility === "invite") {
-    const row = await env.DB.prepare("SELECT id FROM project_access WHERE project_id = ? AND lower(email) = lower(?)")
-      .bind(project.id, user.email)
-      .first<{ id: string }>();
-    return !!row;
   }
   return false;
 }

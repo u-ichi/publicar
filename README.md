@@ -48,6 +48,10 @@ Use the [setup guide](docs/setup.md) to create Cloudflare resources, configure G
 
 Google OAuth client setup is documented in [Google OAuth setup](docs/google-oauth-setup.md).
 
+To invite people outside your organization to individual projects, see
+[Inviting external collaborators](docs/external-collaborators.md). The standard setup flow
+already enables it; keep the OAuth audience internal only if you want to stay organization-only.
+
 The production setup flow is:
 
 1. Create a Cloudflare D1 database, KV namespace, and R2 bucket.
@@ -135,3 +139,7 @@ npm test
 ## License
 
 publicar is licensed under the [Apache License 2.0](LICENSE).
+
+Application code, tests, migrations, and reusable setup documentation are maintained in this public repository. Production configuration and deployment credentials belong to the operator's private repository. CI can start its deployment workflow after tests pass; it does not copy application files between repositories.
+
+Automated document uploads use [project upload keys and a Google service account](docs/organization-security.md).

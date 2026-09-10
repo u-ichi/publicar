@@ -1,6 +1,7 @@
 import type { AuthUser, Env } from "../env";
 import { constantTimeEqual, hmacSha256Base64Url, sha256Base64Url } from "../lib/crypto";
 import { randomBase64Url } from "../lib/encoding";
+import { getUserById } from "../db/users";
 
 export const SESSION_COOKIE_NAME = "__Host-publicar_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -74,7 +75,7 @@ export function clearSessionCookie(env: Env): string {
   return expiredCookieHeaderValue(env, SESSION_COOKIE_NAME);
 }
 
-export async function getSessionUser(request: Request, env: Env): Promise<AuthUser | null> {
+export async function getStoredSession(request: Request, env: Env): Promise<StoredSession | null> {
   const value = parseCookie(request.headers.get("Cookie")).get(SESSION_COOKIE_NAME);
   if (!value) {
     return null;
@@ -94,7 +95,26 @@ export async function getSessionUser(request: Request, env: Env): Promise<AuthUs
     await env.SESSIONS.delete(key);
     return null;
   }
-  return stored.user;
+  return stored;
+}
+
+export async function getSessionUser(request: Request, env: Env): Promise<AuthUser | null> {
+  return (await getStoredSession(request, env))?.user ?? null;
+}
+
+export async function getActiveSessionUser(request: Request, env: Env): Promise<AuthUser | null> {
+  const session = await getStoredSession(request, env);
+  if (!session) return null;
+  const state = await env.DB.prepare("SELECT sessions_valid_after FROM users WHERE id = ? AND disabled_at IS NULL")
+    .bind(session.user.id).first<{ sessions_valid_after: number }>();
+  if (!state || session.createdAt <= state.sessions_valid_after) return null;
+  return getUserById(env, session.user.id);
+}
+
+export async function sessionReference(request: Request, env: Env): Promise<string | null> {
+  const value = parseCookie(request.headers.get("Cookie")).get(SESSION_COOKIE_NAME);
+  const id = value ? await verifiedSessionId(value, env) : null;
+  return id ? sessionKey(id) : null;
 }
 
 async function verifiedSessionId(cookieValue: string, env: Env): Promise<string | null> {
