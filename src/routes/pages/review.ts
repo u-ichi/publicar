@@ -58,7 +58,7 @@ export function commentWorkbenchPage(user: AuthUser, project: Project, path: str
     `<script>
 // ヘッダーを読み込む前に親画面へ移動し、通信が遅い場合も重複表示を防ぐ。
 if (window.frameElement?.id === "review-frame") {
-  document.documentElement.style.display = "none";
+  window.frameElement.style.visibility = "hidden";
   window.parent.location.replace(window.location.href);
 }
 </script>` +
