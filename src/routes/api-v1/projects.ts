@@ -5,29 +5,74 @@ import {
   countProjectOwners,
   createProject,
   deleteProject,
+  deleteProjectAccess,
   deleteProjectMember,
+  getProjectAccess,
+  getProjectById,
   getProjectForUser,
   getProjectRole,
+  isDriveAccessRole,
   isProjectVisibility,
   isValidAlias,
+  isValidInviteEmail,
   listProjectsForUser,
+  listProjectAccess,
   listProjectMembers,
   normalizeFilePath,
   updateProject,
+  updateProjectAccessDriveState,
   updateProjectMemberRole,
+  upsertProjectAccess,
   upsertProjectMember,
   type ProjectRole
 } from "../../db/projects";
 import { getUserByEmail } from "../../db/users";
 import type { AppBindings } from "../../env";
-import { withDriveAuthRetry } from "../../lib/drive-retry";
+import { withDriveAuthRetry, withProjectDriveAuth } from "../../lib/drive-retry";
+import { getProjectStorage } from "../../storage/service-account-drive";
+import { removeServiceAccountFile, removeServiceAccountProject } from "../../db/storage-mutations";
+import { beginLegacyStorageOperation, assertLegacyStorageOperation, finishLegacyStorageOperation } from "../../db/storage-transition";
 import { jsonArray, projectUrl } from "../../lib/http";
 import { clampRequestLimit, nullableStringValue, readJsonObject, stringValue } from "../../lib/request";
 import { deleteCachedFile, deleteCachedPrefix } from "../../storage/r2";
 import { deleteProjectFile, getProjectFile, listProjectFilesWithDeployers, r2KeyForProjectFile } from "../../db/project-files";
-import { trashDriveFile } from "../../storage/drive";
+import {
+  createDrivePermission,
+  deleteDrivePermission,
+  trashDriveFile,
+  updateDrivePermission
+} from "../../storage/drive";
 import { driveDeleteFailureResponse } from "./drive-errors";
 import { requireOwner } from "./guards";
+
+/** Drive 失敗理由を UI / API 向けの短文にする */
+function driveErrorMessage(error: unknown, action: "grant" | "revoke"): string {
+  const fallback =
+    action === "grant" ? "Drive 権限の付与に失敗しました" : "Drive 権限の取り消しに失敗しました";
+  if (!(error instanceof Error)) {
+    return fallback;
+  }
+  const message = error.message;
+  const statusMatch = message.match(/failed with (\d+)/);
+  const status = statusMatch?.[1];
+  let reason = "";
+  if (message.includes("domainPolicy")) {
+    reason = "domainPolicy (組織の外部共有ポリシー)";
+  } else if (message.includes("sharingRateLimitExceeded")) {
+    reason = "sharingRateLimitExceeded (共有レート制限)";
+  } else if (message.includes("invalidSharingRequest")) {
+    reason = "invalidSharingRequest";
+  } else if (message.includes("cannotModifyInheritedTeamDrivePermission")) {
+    reason = "cannotModifyInheritedTeamDrivePermission";
+  }
+  if (status && reason) {
+    return `${fallback} (HTTP ${status}: ${reason})`;
+  }
+  if (status) {
+    return `${fallback} (HTTP ${status})`;
+  }
+  return `${fallback}: ${message.slice(0, 120)}`;
+}
 
 export const projectsRoute = new Hono<AppBindings>();
 
@@ -189,23 +234,35 @@ projectsRoute.delete("/:id/files", async (c) => {
     return c.json({ ok: true, deleted: false });
   }
   const ownerUserId = file.driveOwnerUserId ?? c.get("user").id;
-  try {
-    if (file.driveFileId) {
-      const driveFileId = file.driveFileId;
-      await withDriveAuthRetry(c.env, ownerUserId, async (accessToken) => {
-        return trashDriveFile(c.env, accessToken, driveFileId);
-      });
-    }
-  } catch (error) {
-    const response = driveDeleteFailureResponse(c, error);
-    if (response) {
-      return response;
-    }
-    throw error;
+  if ((await getProjectStorage(c.env, id))?.storage_service_account) {
+    try {
+      return c.json({ ok: true, deleted: await removeServiceAccountFile(c.env, id, path, c.get("user").id) });
+    } catch { return c.json({ error: "deployment_conflict" }, 409); }
   }
-  await deleteCachedFile(c.env, file.r2Key);
-  await deleteProjectFile(c.env, id, path);
-  return c.json({ ok: true, deleted: true });
+  const operation = await beginLegacyStorageOperation(c.env, id);
+  if (!operation) return c.json({ error: "project_storage_changed" }, 409);
+  try {
+    try {
+      if (file.driveFileId) {
+        const driveFileId = file.driveFileId;
+        await withDriveAuthRetry(c.env, ownerUserId, async (accessToken) => {
+          await assertLegacyStorageOperation(c.env, operation);
+          return trashDriveFile(c.env, accessToken, driveFileId);
+        });
+      }
+    } catch (error) {
+      const response = driveDeleteFailureResponse(c, error);
+      if (response) {
+        return response;
+      }
+      throw error;
+    }
+    await assertLegacyStorageOperation(c.env, operation);
+    await deleteCachedFile(c.env, file.r2Key);
+    await assertLegacyStorageOperation(c.env, operation);
+    await deleteProjectFile(c.env, id, path);
+    return c.json({ ok: true, deleted: true });
+  } finally { await finishLegacyStorageOperation(c.env, operation); }
 });
 
 projectsRoute.delete("/:id", async (c) => {
@@ -215,23 +272,36 @@ projectsRoute.delete("/:id", async (c) => {
   if (!project || !canOwnProject(role)) {
     return c.json({ error: role ? "forbidden" : "not_found" }, role ? 403 : 404);
   }
-  if (project.driveFolderId) {
-    const driveFolderId = project.driveFolderId;
+  if ((await getProjectStorage(c.env, id))?.storage_service_account) {
     try {
-      await withDriveAuthRetry(c.env, project.createdBy, async (accessToken) => {
-        await trashDriveFile(c.env, accessToken, driveFolderId);
-      }, { ignoreTrash404OnFirstAttempt: true });
-    } catch (error) {
-      const response = driveDeleteFailureResponse(c, error);
-      if (response) {
-        return response;
-      }
-      throw error;
-    }
+      await removeServiceAccountProject(c.env, id, c.get("user").id);
+      return c.json({ ok: true, deleted: true });
+    } catch { return c.json({ error: "project_storage_changed" }, 409); }
   }
-  await deleteCachedPrefix(c.env, `projects/${id}/`);
-  await deleteProject(c.env, id);
-  return c.json({ ok: true, deleted: true });
+  const operation = await beginLegacyStorageOperation(c.env, id);
+  if (!operation) return c.json({ error: "project_storage_changed" }, 409);
+  try {
+    if (project.driveFolderId) {
+      const driveFolderId = project.driveFolderId;
+      try {
+        await withDriveAuthRetry(c.env, project.createdBy, async (accessToken) => {
+          await assertLegacyStorageOperation(c.env, operation);
+          await trashDriveFile(c.env, accessToken, driveFolderId);
+        }, { ignoreTrash404OnFirstAttempt: true });
+      } catch (error) {
+        const response = driveDeleteFailureResponse(c, error);
+        if (response) {
+          return response;
+        }
+        throw error;
+      }
+    }
+    await assertLegacyStorageOperation(c.env, operation);
+    await deleteCachedPrefix(c.env, `projects/${id}/`);
+    await assertLegacyStorageOperation(c.env, operation);
+    await deleteProject(c.env, id);
+    return c.json({ ok: true, deleted: true });
+  } finally { await finishLegacyStorageOperation(c.env, operation); }
 });
 
 projectsRoute.get("/:id/members", async (c) => {
@@ -308,6 +378,139 @@ projectsRoute.delete("/:id/members/:userId", async (c) => {
     return c.json({ error: "not_found" }, 404);
   }
   return c.json({ ok: true });
+});
+
+projectsRoute.get("/:id/access", async (c) => {
+  const id = c.req.param("id");
+  const ownerError = await requireOwner(c, id);
+  if (ownerError) {
+    return ownerError;
+  }
+  return c.json({ access: await listProjectAccess(c.env, id) });
+});
+
+projectsRoute.post("/:id/access", async (c) => {
+  const id = c.req.param("id");
+  const ownerError = await requireOwner(c, id);
+  if (ownerError) {
+    return ownerError;
+  }
+  const body = await readJsonObject(c.req.raw);
+  if (!body) {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+  const email = stringValue(body.email)?.trim().toLowerCase();
+  if (!email || !isValidInviteEmail(email)) {
+    return c.json({ error: "invalid_email" }, 400);
+  }
+  const driveRoleRaw = body.drive_role === undefined ? "reader" : body.drive_role;
+  if (!isDriveAccessRole(driveRoleRaw)) {
+    return c.json({ error: "invalid_drive_role" }, 400);
+  }
+  try {
+    let access = await upsertProjectAccess(c.env, {
+      projectId: id,
+      email,
+      grantedBy: c.get("user").id,
+      driveRole: driveRoleRaw
+    });
+    const project = await getProjectById(c.env, id);
+    let driveError: string | null = null;
+    // upsert 後も保持されている既存 id (再招待で失敗しても孤児化させない)
+    const previousPermissionId = access.drivePermissionId;
+    if (!project?.driveFolderId) {
+      driveError = "Drive フォルダ未作成のため未反映";
+      await updateProjectAccessDriveState(c.env, access.id, {
+        drivePermissionId: previousPermissionId,
+        driveError
+      });
+    } else {
+      try {
+        const permissionId = await withProjectDriveAuth(c.env, project.id, project.createdBy, async (accessToken) => {
+          // 既存 permission がある再招待は create せず role 更新 (孤児化・重複防止)
+          if (previousPermissionId) {
+            await updateDrivePermission(
+              c.env,
+              accessToken,
+              project.driveFolderId!,
+              previousPermissionId,
+              driveRoleRaw
+            );
+            return previousPermissionId;
+          }
+          return createDrivePermission(c.env, accessToken, project.driveFolderId!, {
+            email,
+            role: driveRoleRaw
+          });
+        });
+        await updateProjectAccessDriveState(c.env, access.id, {
+          drivePermissionId: permissionId,
+          driveError: null
+        });
+      } catch (error) {
+        // publicar の招待は成立させる。Drive 失敗時も既存 permission id は維持する
+        driveError = driveErrorMessage(error, "grant");
+        await updateProjectAccessDriveState(c.env, access.id, {
+          drivePermissionId: previousPermissionId,
+          driveError
+        });
+      }
+    }
+    const refreshed = await getProjectAccess(c.env, id, access.id);
+    access = refreshed ?? access;
+    return c.json({ ok: true, access, drive_error: driveError }, 201);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("Invalid invite email")) {
+      return c.json({ error: "invalid_email" }, 400);
+    }
+    return c.json({ error: "access_upsert_failed" }, 400);
+  }
+});
+
+projectsRoute.delete("/:id/access/:accessId", async (c) => {
+  const id = c.req.param("id");
+  const accessId = c.req.param("accessId");
+  const ownerError = await requireOwner(c, id);
+  if (ownerError) {
+    return ownerError;
+  }
+  // project_id + id の両条件必須 (他 project の accessId 指定は 404)
+  const existing = await getProjectAccess(c.env, id, accessId);
+  if (!existing) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  // publicar 付与分 (drive_permission_id がある) だけ Drive を取り消す
+  if (existing.drivePermissionId) {
+    const project = await getProjectById(c.env, id);
+    if (project?.driveFolderId) {
+      try {
+        await withProjectDriveAuth(c.env, project.id, project.createdBy, async (accessToken) => {
+          await deleteDrivePermission(
+            c.env,
+            accessToken,
+            project.driveFolderId!,
+            existing.drivePermissionId!
+          );
+        });
+      } catch (error) {
+        // 取り消し失敗時は行を残し再試行可能にする (drive_permission_id を失わない)
+        const driveError = driveErrorMessage(error, "revoke");
+        await updateProjectAccessDriveState(c.env, accessId, {
+          drivePermissionId: existing.drivePermissionId,
+          driveError
+        });
+        return c.json({ error: "drive_revoke_failed", drive_error: driveError }, 502);
+      }
+    }
+  }
+
+  const deleted = await deleteProjectAccess(c.env, id, accessId);
+  if (!deleted) {
+    return c.json({ error: "not_found" }, 404);
+  }
+  return c.json({ ok: true, drive_error: null });
 });
 
 projectsRoute.get("/:id/access-logs", async (c) => {

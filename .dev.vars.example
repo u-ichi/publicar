@@ -13,3 +13,16 @@ ALLOWED_SIGNUP_DOMAINS=example.com
 DEFAULT_VISIBILITY=domain
 MAX_UPLOAD_BYTES=5242880
 # TEAM_DRIVE_ID=replace-with-shared-drive-id
+
+# 自動アップロード。Google Cloudのサービスアカウントを使用する。
+# GOOGLE_SERVICE_ACCOUNT_EMAIL=publicar-uploader@example-project.iam.gserviceaccount.com
+# GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY="PKCS#8形式のPEM秘密鍵"
+# 新規プロジェクトのフォルダを作る場合は、publicar専用の親フォルダを明示する。
+# GOOGLE_SERVICE_ACCOUNT_ROOT_FOLDER_ID=replace-with-publicar-storage-folder-id
+MAX_EXPANDED_UPLOAD_BYTES=20971520
+MAX_UPLOAD_FILES=200
+
+# 組織の監査・利用者管理。アップロードキーの発行はプロジェクト所有者が行う。
+# AUTOMATION_ORGANIZATION_ID=example-organization
+# ORGANIZATION_ADMIN_EMAILS=admin@example.com
+SECURITY_LOG_RETENTION_DAYS=90

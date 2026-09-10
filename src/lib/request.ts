@@ -2,8 +2,12 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
   if (!request.headers.get("Content-Type")?.includes("application/json")) {
     return null;
   }
-  const value = await request.json<unknown>();
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  try {
+    const value = await request.json<unknown>();
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function stringValue(value: unknown): string | undefined {

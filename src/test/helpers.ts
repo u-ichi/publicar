@@ -11,6 +11,10 @@ import commentsMigration from "../../migrations/0005_comments.sql?raw";
 import commentEventsMigration from "../../migrations/0006_comment_events.sql?raw";
 import deployEventsMigration from "../../migrations/0007_deploy_events.sql?raw";
 import actorKindMigration from "../../migrations/0008_actor_kind.sql?raw";
+import guestAccessMigration from "../../migrations/0009_guest_access.sql?raw";
+import accessDriveMigration from "../../migrations/0010_access_drive.sql?raw";
+import organizationSecurityMigration from "../../migrations/0011_organization_security.sql?raw";
+import serviceAccountMigration from "../../migrations/0012_service_account_uploads.sql?raw";
 
 export type { AuthUser, Env };
 
@@ -41,7 +45,8 @@ export const user: AuthUser = {
   googleId: "google_1",
   email: "user@example.com",
   name: "Test User",
-  avatarUrl: null
+  avatarUrl: null,
+  kind: "member"
 };
 
 export const editorUser: AuthUser = {
@@ -49,7 +54,17 @@ export const editorUser: AuthUser = {
   googleId: "google_2",
   email: "editor@example.com",
   name: "Editor User",
-  avatarUrl: null
+  avatarUrl: null,
+  kind: "member"
+};
+
+export const guestUser: AuthUser = {
+  id: "user_guest",
+  googleId: "google_guest",
+  email: "guest@gmail.com",
+  name: "Guest User",
+  avatarUrl: null,
+  kind: "guest"
 };
 
 export const avatarUser: AuthUser = {
@@ -81,6 +96,10 @@ async function ensureSchema(localEnv: Env): Promise<void> {
   await executeMigration(localEnv, commentEventsMigration);
   await executeMigration(localEnv, deployEventsMigration);
   await executeMigration(localEnv, actorKindMigration);
+  await executeMigration(localEnv, guestAccessMigration);
+  await executeMigration(localEnv, accessDriveMigration);
+  await executeMigration(localEnv, organizationSecurityMigration);
+  await executeMigration(localEnv, serviceAccountMigration);
   schemaReady = true;
 }
 
@@ -89,11 +108,18 @@ export async function resetDatabase(localEnv: Env): Promise<void> {
   await localEnv.DB.prepare("DELETE FROM notification_deliveries").run();
   await localEnv.DB.prepare("DELETE FROM notification_events").run();
   await localEnv.DB.prepare("DELETE FROM deploy_events").run();
+  await localEnv.DB.prepare("DELETE FROM project_revisions").run();
+  await localEnv.DB.prepare("DELETE FROM upload_objects").run();
+  await localEnv.DB.prepare("DELETE FROM drive_cleanup_folders").run();
+  await localEnv.DB.prepare("DELETE FROM upload_keys").run();
+  await localEnv.DB.prepare("DELETE FROM legacy_storage_operations").run();
   await localEnv.DB.prepare("DELETE FROM comment_events").run();
   await localEnv.DB.prepare("DELETE FROM comment_replies").run();
   await localEnv.DB.prepare("DELETE FROM comment_threads").run();
   await localEnv.DB.prepare("DELETE FROM access_logs").run();
   await localEnv.DB.prepare("DELETE FROM api_keys").run();
+  await localEnv.DB.prepare("DELETE FROM automation_grants").run();
+  await localEnv.DB.prepare("DELETE FROM security_events").run();
   await localEnv.DB.prepare("DELETE FROM project_files").run();
   await localEnv.DB.prepare("DELETE FROM project_access").run();
   await localEnv.DB.prepare("DELETE FROM project_members").run();
@@ -116,9 +142,9 @@ export async function seedUser(
   const refreshToken = overrides.refreshToken ?? "refresh-token";
   await localEnv.DB.prepare(
     `INSERT INTO users (
-      id, google_id, email, name, avatar_url, encrypted_access_token,
+      id, google_id, email, name, avatar_url, kind, encrypted_access_token,
       encrypted_refresh_token, token_expires_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       seededUser.id,
@@ -126,6 +152,7 @@ export async function seedUser(
       seededUser.email,
       seededUser.name,
       seededUser.avatarUrl,
+      seededUser.kind ?? "member",
       await encryptToken(accessToken, localEnv.TOKEN_ENCRYPTION_KEY),
       await encryptToken(refreshToken, localEnv.TOKEN_ENCRYPTION_KEY),
       overrides.tokenExpiresAt ?? Math.floor(Date.now() / 1000) + 3600

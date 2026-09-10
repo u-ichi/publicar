@@ -38,24 +38,13 @@ function projectListRows(projects: Project[]): string {
 }
 
 function dashboard(user: AuthUser, projects: Project[]): string {
-  return shell(
-    user,
-    `<div class="toolbar">
-  <div class="search">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
-    <input id="project-search" placeholder="プロジェクトを検索..." autocomplete="off">
-  </div>
-  <div class="segmented" role="group" aria-label="表示モード">
-    <button type="button" data-view-mode="grid" aria-pressed="true" aria-label="カード表示" title="カード表示">${iconGrid()}</button>
-    <button type="button" data-view-mode="list" aria-pressed="false" aria-label="リスト表示" title="リスト表示">${iconList()}</button>
-  </div>
-  <button class="button" type="button" data-open-modal="#new-project-dialog">+ 新規プロジェクト</button>
-</div>
-<section class="grid" id="project-grid">${projects.map(projectCard).join("") || '<div class="empty">No projects</div>'}</section>
-<section class="project-list panel" id="project-list" hidden>
-  <table><thead><tr><th>プロジェクト</th><th>URL</th><th>公開設定</th><th>ロール</th><th></th></tr></thead><tbody>${projectListRows(projects)}</tbody></table>
-</section>
-<dialog id="new-project-dialog">
+  const isGuest = user.kind === "guest";
+  const createControls = isGuest
+    ? ""
+    : `<button class="button" type="button" data-open-modal="#new-project-dialog">+ 新規プロジェクト</button>`;
+  const createDialog = isGuest
+    ? ""
+    : `<dialog id="new-project-dialog">
   <form class="modal-body" id="create-project">
     <h2>新規プロジェクト</h2>
     <label>プロジェクト名<input name="title" autocomplete="off" required></label>
@@ -73,7 +62,25 @@ function dashboard(user: AuthUser, projects: Project[]): string {
     <div class="row"><button class="button" type="submit">作成</button><button class="button secondary" type="button" data-close-modal>キャンセル</button></div>
     <div id="create-status" class="status" aria-live="polite"></div>
   </form>
-</dialog>
+</dialog>`;
+  return shell(
+    user,
+    `<div class="toolbar">
+  <div class="search">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+    <input id="project-search" placeholder="プロジェクトを検索..." autocomplete="off">
+  </div>
+  <div class="segmented" role="group" aria-label="表示モード">
+    <button type="button" data-view-mode="grid" aria-pressed="true" aria-label="カード表示" title="カード表示">${iconGrid()}</button>
+    <button type="button" data-view-mode="list" aria-pressed="false" aria-label="リスト表示" title="リスト表示">${iconList()}</button>
+  </div>
+  ${createControls}
+</div>
+<section class="grid" id="project-grid">${projects.map(projectCard).join("") || '<div class="empty">No projects</div>'}</section>
+<section class="project-list panel" id="project-list" hidden>
+  <table><thead><tr><th>プロジェクト</th><th>URL</th><th>公開設定</th><th>ロール</th><th></th></tr></thead><tbody>${projectListRows(projects)}</tbody></table>
+</section>
+${createDialog}
 <script>
 ${dashboardScript()}
 </script>`

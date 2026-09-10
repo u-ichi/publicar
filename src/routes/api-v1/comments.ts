@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { validCommentAnchor } from "../../lib/comment-input";
 import {
   addCommentReply,
   canModerateComment,
@@ -15,7 +16,7 @@ import { getProjectFile } from "../../db/project-files";
 import { canViewProject, getProjectById, getProjectRole, normalizeFilePath } from "../../db/projects";
 import { createCommentNotification } from "../../db/notifications";
 import type { AppBindings } from "../../env";
-import { downloadDriveFileWithRetry } from "../../lib/drive-retry";
+import { downloadProjectFileWithRetry } from "../../lib/drive-retry";
 import { clampRequestLimit, objectValue, readJsonObject, stringValue } from "../../lib/request";
 import { runBackground } from "../../lib/run-background";
 import { getCachedFile } from "../../storage/r2";
@@ -76,7 +77,7 @@ commentsRoute.get("/:id/review-content", async (c) => {
     });
   }
   const ownerUserId = file.driveOwnerUserId ?? viewable.project.createdBy;
-  const driveFile = await downloadDriveFileWithRetry(c.env, ownerUserId, file.driveFileId);
+  const driveFile = await downloadProjectFileWithRetry(c.env, projectId, ownerUserId, file.driveFileId);
   if (driveFile.status === 403 || driveFile.status === 404) {
     return c.json({ error: "not_found" }, 404);
   }
@@ -142,7 +143,8 @@ commentsRoute.post("/:id/comments", async (c) => {
   const commentBody = stringValue(body.body)?.trim();
   const anchor = objectValue(body.anchor);
   const actorKind = body.actorKind === undefined ? "human" : body.actorKind;
-  if (!path || !commentBody || !anchor || !isCommentActorKind(actorKind)) {
+  if (!path || !commentBody || commentBody.length > 20000 || !anchor || !validCommentAnchor(anchor) || !isCommentActorKind(actorKind) ||
+      [body.selected_text, body.prefix, body.suffix].some((value) => value !== undefined && (typeof value !== "string" || value.length > 10000))) {
     return c.json({ error: "invalid_comment" }, 400);
   }
   const file = await getProjectFile(c.env, projectId, path);

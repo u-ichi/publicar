@@ -1,6 +1,6 @@
 # Google OAuth セットアップガイド
 
-[README](../README.md) / [日本語 README](../README.ja.md) / [セットアップガイド](setup.md) / [ローカル開発ガイド](local-development.md)
+[README](../README.md) / [日本語 README](../README.ja.md) / [セットアップガイド](setup.md) / [ローカル開発ガイド](local-development.md) / [社外コラボレーターの招待](external-collaborators.md)
 
 publicar の認証に必要な Google OAuth 2.0 クライアントの作成手順。
 
@@ -18,8 +18,15 @@ publicar の認証に必要な Google OAuth 2.0 クライアントの作成手�
 
 ### 2. OAuth 同意画面の設定
 
-1. 「APIとサービス」→「OAuth 同意画面」を開く
-2. User Type: 「内部」を選択（組織内ユーザーのみ利用する場合）
+1. 「Google 認証プラットフォーム」→「対象」（旧「APIとサービス」→「OAuth 同意画面」）を開く
+2. ユーザーの種類: **「外部」を選択し、公開ステータスは「本番環境」にする**（推奨）
+   - 社外のコラボレーターをプロジェクト単位で招待できるようにするための設定。
+     「内部」のままだと、招待しても社外アカウントは `403: org_internal` でログインできない
+   - 「外部」にしても誰でも使えるようになるわけではない。ログインの可否は publicar 側が
+     `ALLOWED_SIGNUP_DOMAINS` と招待の有無で判定し、該当しないアカウントは 403 で拒否する
+   - 社外共有を一切使わず、組織内ユーザーだけに閉じる運用なら「内部」を選ぶ
+   - 詳細と、テストモードを選んではいけない理由は
+     [社外コラボレーターの招待](external-collaborators.md) を参照
 3. 必須項目を入力:
    - アプリ名: `publicar`
    - ユーザーサポートメール: 管理者のメールアドレス
@@ -29,6 +36,9 @@ publicar の認証に必要な Google OAuth 2.0 クライアントの作成手�
    - `email`
    - `profile`
    - `https://www.googleapis.com/auth/drive.file`
+
+   4 つとも Google の分類上「非機密 (non-sensitive)」なので、「外部 / 本番環境」で公開しても
+   Google のアプリ審査は不要で、同意画面に「確認されていないアプリ」の警告も出ない。
 
 ### 3. OAuth クライアントの作成
 

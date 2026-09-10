@@ -1,6 +1,6 @@
 # publicar セットアップガイド
 
-[README](../README.md) / [日本語 README](../README.ja.md) / [ローカル開発ガイド](local-development.md) / [Google OAuth セットアップガイド](google-oauth-setup.md)
+[README](../README.md) / [日本語 README](../README.ja.md) / [ローカル開発ガイド](local-development.md) / [Google OAuth セットアップガイド](google-oauth-setup.md) / [社外コラボレーターの招待](external-collaborators.md)
 
 自組織向けの publicar インスタンスを Cloudflare にデプロイする手順。
 
@@ -41,6 +41,8 @@ npx wrangler r2 bucket create publicar-cache
 ## 3. Google OAuth の設定
 
 [Google OAuth セットアップガイド](google-oauth-setup.md) に従って、OAuth 2.0 クライアントを作成し、Client ID と Client Secret を取得する。
+
+OAuth の「対象」は **「外部 / 本番環境」** を選ぶ (社外コラボレーターをプロジェクト単位で招待できるようにするため。組織内に閉じる運用なら「内部」)。招待の運用は [社外コラボレーターの招待](external-collaborators.md) を参照。
 
 ## 4. Google Shared Drive の準備
 

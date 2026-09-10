@@ -111,7 +111,8 @@ describe("publicar worker", () => {
 
   it("sets authenticated users on the request context", async () => {
     const localEnv = testEnv();
-    const cookie = await createSession(localEnv, user);
+    // resolveAuth は users 行から kind 等を解決するため session だけでは足りない
+    const cookie = await authCookie(localEnv, user);
     const response = await app.fetch(
       new Request("http://localhost/api/v1/whoami", {
         headers: { Cookie: cookie }

@@ -1,12 +1,19 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import migrationSql from "../migrations/0001_init.sql?raw";
+import organizationSecurityMigration from "../migrations/0011_organization_security.sql?raw";
+import cliAuthMigration from "../migrations/0003_cli_auth.sql?raw";
+import guestAccessMigration from "../migrations/0009_guest_access.sql?raw";
 import { SESSION_COOKIE_NAME } from "../src/auth/session";
 import type { Env } from "../src/env";
 import { bytesToBase64Url, jsonToBase64Url, utf8ToBytes } from "../src/lib/encoding";
 import app from "../src/index";
 
 const tableNames = [
+  "content_tickets",
+  "cli_auth_states",
+  "security_events",
+  "automation_grants",
   "oauth_states",
   "invites",
   "api_keys",
@@ -50,6 +57,16 @@ function db(): D1Database {
 async function resetDb(): Promise<void> {
   await db().exec(`PRAGMA foreign_keys = OFF; ${tableNames.map((table) => `DROP TABLE IF EXISTS ${table};`).join(" ")}`);
   await db().exec(migrationSql.replace(/\s+/g, " "));
+  // 0009: users.kind / project_access.user_id (OAuth 経路が kind を保存する)
+  for (const statement of guestAccessMigration
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    await db().prepare(statement).run();
+  }
+  for (const statement of (cliAuthMigration + organizationSecurityMigration).split(";").map(s => s.trim()).filter(Boolean)) {
+    await db().prepare(statement).run();
+  }
 }
 
 async function createSignedIdToken(claimOverrides: Record<string, unknown>): Promise<SignedToken> {
@@ -90,7 +107,7 @@ async function createSignedIdToken(claimOverrides: Record<string, unknown>): Pro
   return { jwt: `${input}.${bytesToBase64Url(new Uint8Array(signature))}`, jwk };
 }
 
-async function oauthState(localEnv: Env): Promise<{ state: string; nonce: string }> {
+async function oauthState(localEnv: Env): Promise<{ state: string; nonce: string; cookie: string }> {
   const response = await app.fetch(new Request("http://localhost/auth/login?redirectTo=/dashboard"), localEnv);
   const location = response.headers.get("Location");
   expect(location).toBeTruthy();
@@ -103,7 +120,7 @@ async function oauthState(localEnv: Env): Promise<{ state: string; nonce: string
     .bind(state)
     .first<{ nonce: string }>();
   expect(row?.nonce).toBe(nonce);
-  return { state, nonce };
+  return { state, nonce, cookie: response.headers.get("Set-Cookie")?.split(";")[0] ?? "" };
 }
 
 function mockGoogleFetch(token: SignedToken, options: { tokenFailure?: boolean } = {}): void {
@@ -161,12 +178,22 @@ describe("Google OAuth routes", () => {
     expect(url.searchParams.get("redirect_uri")).toBe("http://localhost/auth/callback");
   });
 
-  it("exchanges a valid callback for an encrypted-token user row and session cookie", async () => {
+  it("rejects a callback in a browser that did not initiate the login", async () => {
     const localEnv = testEnv();
     const { state, nonce } = await oauthState(localEnv);
     mockGoogleFetch(await createSignedIdToken({ nonce }));
+    const result = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+    expect(result.status).toBe(400);
+    expect(result.headers.get("Set-Cookie") ?? "").not.toContain(`${SESSION_COOKIE_NAME}=v1.`);
+    expect(await db().prepare("SELECT id FROM users").first()).toBeNull();
+  });
 
-    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+  it("exchanges a valid callback for an encrypted-token user row and session cookie", async () => {
+    const localEnv = testEnv();
+    const { state, nonce, cookie } = await oauthState(localEnv);
+    mockGoogleFetch(await createSignedIdToken({ nonce }));
+
+    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
 
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toBe("/dashboard");
@@ -201,11 +228,11 @@ describe("Google OAuth routes", () => {
 
   it("atomically consumes state so callback replay is rejected", async () => {
     const localEnv = testEnv();
-    const { state, nonce } = await oauthState(localEnv);
+    const { state, nonce, cookie } = await oauthState(localEnv);
     mockGoogleFetch(await createSignedIdToken({ nonce }));
 
-    const first = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
-    const second = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+    const first = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
+    const second = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
 
     expect(first.status).toBe(302);
     expect(second.status).toBe(400);
@@ -213,29 +240,29 @@ describe("Google OAuth routes", () => {
 
   it("rejects token exchange failures", async () => {
     const localEnv = testEnv();
-    const { state, nonce } = await oauthState(localEnv);
+    const { state, nonce, cookie } = await oauthState(localEnv);
     mockGoogleFetch(await createSignedIdToken({ nonce }), { tokenFailure: true });
 
-    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
 
     expect(response.status).toBe(400);
   });
 
   it("rejects accounts outside allowed domains", async () => {
     const localEnv = testEnv();
-    const { state, nonce } = await oauthState(localEnv);
+    const { state, nonce, cookie } = await oauthState(localEnv);
     mockGoogleFetch(await createSignedIdToken({ nonce, email: "user@other.com", hd: "other.com" }));
 
-    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
 
     expect(response.status).toBe(403);
   });
 
   it("rejects weak session secrets before storing OAuth tokens", async () => {
     const localEnv = testEnv({ SESSION_SECRET: "weak" });
-    const { state } = await oauthState(localEnv);
+    const { state, cookie } = await oauthState(localEnv);
 
-    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
 
     expect(response.status).toBe(400);
     await expect(db().prepare("SELECT id FROM users").first()).resolves.toBeNull();
@@ -243,9 +270,9 @@ describe("Google OAuth routes", () => {
 
   it("rejects invalid token encryption keys before storing OAuth tokens", async () => {
     const localEnv = testEnv({ TOKEN_ENCRYPTION_KEY: "not-a-valid-key" });
-    const { state } = await oauthState(localEnv);
+    const { state, cookie } = await oauthState(localEnv);
 
-    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`), localEnv);
+    const response = await app.fetch(new Request(`http://localhost/auth/callback?code=ok&state=${state}`, { headers: { Cookie: cookie } }), localEnv);
 
     expect(response.status).toBe(400);
     await expect(db().prepare("SELECT id FROM users").first()).resolves.toBeNull();

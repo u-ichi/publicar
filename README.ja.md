@@ -39,6 +39,8 @@ docker compose up --build
 
 Google OAuth の設定は **[Google OAuth セットアップガイド](docs/google-oauth-setup.md)** を参照。
 
+社外の Google アカウントをプロジェクト単位で招待する運用は **[社外コラボレーターの招待](docs/external-collaborators.md)** を参照。標準のセットアップ手順どおりに構築すれば最初から利用でき、組織内に閉じたい場合だけ OAuth の対象を「内部」にする。
+
 ## API
 
 | メソッド | パス | 説明 |
@@ -91,3 +93,7 @@ npm run deploy       # 本番デプロイ
 ## ライセンス
 
 [Apache License 2.0](LICENSE)
+
+アプリ本体・テスト・マイグレーション・共通の導入資料は、この公開リポジトリで管理します。本番設定と配備用の認証情報は運用者の非公開リポジトリで管理し、公開 main のテスト成功後に、そのコミットを指定して配備します。リポジトリ間でアプリのファイルを同期しません。
+
+文書の自動アップロードは[プロジェクトのアップロードキーとGoogleサービスアカウント](docs/organization-security.md)を使います。

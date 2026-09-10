@@ -6,6 +6,14 @@ import { randomId } from "../lib/id";
 const VALID_SCOPES = ["read", "write", "deploy"] as const;
 export type Scope = (typeof VALID_SCOPES)[number];
 
+// UTCの実在する日時だけを受け付け、日付の自動繰り上がりを拒否する。
+export function expirationTime(value: unknown): number {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)) return NaN;
+  const time = Date.parse(value);
+  const normalized = value.replace(/(?:\.(\d{1,3}))?Z$/, (_match, fraction: string | undefined) => `.${(fraction ?? "").padEnd(3, "0")}Z`);
+  return Number.isFinite(time) && new Date(time).toISOString() === normalized ? time : NaN;
+}
+
 export type ApiKey = {
   id: string;
   userId: string;
@@ -15,6 +23,9 @@ export type ApiKey = {
   lastUsedAt: string | null;
   createdAt: string;
   expiresAt: string | null;
+  projectId: string | null;
+  automationGrantId: string | null;
+  revokedAt: string | null;
 };
 
 type ApiKeyRow = {
@@ -26,6 +37,9 @@ type ApiKeyRow = {
   last_used_at: string | null;
   created_at: string;
   expires_at: string | null;
+  project_id: string | null;
+  automation_grant_id: string | null;
+  revoked_at: string | null;
 };
 
 function rowToApiKey(row: ApiKeyRow): ApiKey {
@@ -37,7 +51,10 @@ function rowToApiKey(row: ApiKeyRow): ApiKey {
     scopes: JSON.parse(row.scopes) as Scope[],
     lastUsedAt: row.last_used_at,
     createdAt: row.created_at,
-    expiresAt: row.expires_at
+    expiresAt: row.expires_at,
+    projectId: row.project_id,
+    automationGrantId: row.automation_grant_id,
+    revokedAt: row.revoked_at
   };
 }
 
@@ -65,15 +82,15 @@ async function generateApiKey(): Promise<{ raw: string; prefix: string; hash: st
 export async function createApiKey(
   env: Env,
   userId: string,
-  opts: { name: string; scopes?: Scope[]; expiresAt?: string | null }
+  opts: { name: string; scopes?: Scope[]; expiresAt?: string | null; projectId?: string | null; automationGrantId?: string | null }
 ): Promise<{ apiKey: ApiKey; rawKey: string }> {
   const { raw, prefix, hash } = await generateApiKey();
   const row = await env.DB.prepare(
-    `INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     RETURNING id, user_id, name, key_prefix, scopes, last_used_at, created_at, expires_at`
+    `INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, expires_at, project_id, automation_grant_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     RETURNING *`
   )
-    .bind(randomId("ak"), userId, opts.name, hash, prefix, JSON.stringify(opts.scopes ?? [...VALID_SCOPES]), opts.expiresAt ?? null)
+    .bind(randomId("ak"), userId, opts.name, hash, prefix, JSON.stringify(opts.scopes ?? ["read"]), opts.expiresAt ?? new Date(Date.now() + 30 * 86400000).toISOString(), opts.projectId ?? null, opts.automationGrantId ?? null)
     .first<ApiKeyRow>();
 
   if (!row) {
@@ -84,7 +101,7 @@ export async function createApiKey(
 
 export async function listApiKeys(env: Env, userId: string): Promise<ApiKey[]> {
   const result = await env.DB.prepare(
-    `SELECT id, user_id, name, key_prefix, scopes, last_used_at, created_at, expires_at
+    `SELECT id, user_id, name, key_prefix, scopes, last_used_at, created_at, expires_at, project_id, automation_grant_id, revoked_at
      FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`
   )
     .bind(userId)
@@ -102,12 +119,15 @@ export type ApiKeyLookup = {
   userId: string;
   scopes: Scope[];
   expiresAt: string | null;
+  projectId: string | null;
+  automationGrantId: string | null;
+  revokedAt: string | null;
 };
 
 export async function findApiKeyByHash(env: Env, hash: string): Promise<ApiKeyLookup | null> {
-  const row = await env.DB.prepare("SELECT id, user_id, scopes, expires_at FROM api_keys WHERE key_hash = ?")
+  const row = await env.DB.prepare("SELECT id, user_id, scopes, expires_at, project_id, automation_grant_id, revoked_at FROM api_keys WHERE key_hash = ?")
     .bind(hash)
-    .first<{ id: string; user_id: string; scopes: string; expires_at: string | null }>();
+    .first<ApiKeyRow>();
   if (!row) {
     return null;
   }
@@ -115,7 +135,10 @@ export async function findApiKeyByHash(env: Env, hash: string): Promise<ApiKeyLo
     id: row.id,
     userId: row.user_id,
     scopes: JSON.parse(row.scopes) as Scope[],
-    expiresAt: row.expires_at
+    expiresAt: row.expires_at,
+    projectId: row.project_id,
+    automationGrantId: row.automation_grant_id,
+    revokedAt: row.revoked_at
   };
 }
 

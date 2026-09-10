@@ -39,7 +39,7 @@ describe("publicar worker", () => {
     expect(json.raw_key).toMatch(/^pub_/);
     expect(json.api_key.name).toBe("test-key");
     expect(json.api_key.keyPrefix).toMatch(/^pub_/);
-    expect(json.api_key.scopes).toEqual(["read", "write", "deploy"]);
+    expect(json.api_key.scopes).toEqual(["read"]);
     expect(json.api_key).not.toHaveProperty("keyHash");
   });
 
@@ -184,7 +184,8 @@ describe("publicar worker", () => {
       googleId: "google_3",
       email: "other@example.com",
       name: "Other User",
-      avatarUrl: null
+      avatarUrl: null,
+      kind: "member"
     });
 
     const deleteResponse = await app.fetch(
@@ -204,8 +205,8 @@ describe("publicar worker", () => {
     expect(response.status).toBe(401);
   });
 
-  async function createTestApiKey(localEnv: Env, cookie: string, name: string, scopes?: string[]): Promise<string> {
-    const body: { name: string; scopes?: string[] } = { name };
+  async function createTestApiKey(localEnv: Env, cookie: string, name: string, scopes?: string[], projectId?: string): Promise<string> {
+    const body: { name: string; scopes?: string[]; project_id?: string } = { name, project_id: projectId };
     if (scopes) {
       body.scopes = scopes;
     }
@@ -263,11 +264,12 @@ describe("publicar worker", () => {
           Cookie: cookie,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ name: "expired", expires_at: "2020-01-01T00:00:00Z" })
+        body: JSON.stringify({ name: "expired", expires_at: new Date(Date.now() + 86400000).toISOString() })
       }),
       localEnv
     );
     const { raw_key: rawKey } = (await createResponse.json()) as { raw_key: string };
+    await localEnv.DB.prepare("UPDATE api_keys SET expires_at = ? WHERE name = ?").bind("2020-01-01T00:00:00Z", "expired").run();
 
     const response = await app.fetch(
       new Request("http://localhost/api/v1/whoami", {
@@ -353,12 +355,12 @@ describe("publicar worker", () => {
   it("allows API key deploys with the deploy scope", async () => {
     const localEnv = testEnv();
     const cookie = await authCookie(localEnv);
-    const rawKey = await createTestApiKey(localEnv, cookie, "deploy-scope", ["read", "write", "deploy"]);
     const project = await createProject(localEnv, user, {
       title: "Scope Deploy",
       alias: "scope-deploy",
       visibility: "public"
     });
+    const rawKey = await createTestApiKey(localEnv, cookie, "deploy-scope", ["deploy"], project.id);
     const fetchMock = mockDriveUploads();
 
     const response = await app.fetch(

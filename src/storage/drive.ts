@@ -52,18 +52,20 @@ function multipartRelatedBody(metadata: unknown, body: ArrayBuffer, mimeType: st
   };
 }
 
-export async function createDriveFolder(env: Env, accessToken: string, name: string): Promise<DriveFile> {
+export async function createDriveFolder(env: Env, accessToken: string, name: string, parentId = env.TEAM_DRIVE_ID): Promise<DriveFile> {
   const url = new URL(`${apiBase(env)}/files`);
   appendSharedDriveParams(url);
   const metadata: Record<string, unknown> = {
     name,
     mimeType: FOLDER_MIME_TYPE
   };
-  if (env.TEAM_DRIVE_ID) {
-    metadata.parents = [env.TEAM_DRIVE_ID];
+  if (parentId) {
+    metadata.parents = [parentId];
   }
   const response = await fetch(url, {
+    redirect: "manual",
     method: "POST",
+    signal: AbortSignal.timeout(60000),
     headers: {
       ...driveHeaders(accessToken),
       "Content-Type": "application/json; charset=UTF-8"
@@ -83,6 +85,7 @@ export async function uploadDriveFile(
     name: string;
     mimeType: string;
     body: ArrayBuffer;
+    uploadObjectId?: string;
   }
 ): Promise<DriveFile> {
   const endpoint = input.fileId ? `${uploadBase(env)}/files/${input.fileId}` : `${uploadBase(env)}/files`;
@@ -93,12 +96,15 @@ export async function uploadDriveFile(
     name: input.name,
     mimeType: input.mimeType
   };
+  if (input.uploadObjectId) metadata.appProperties = { publicar_upload_object: input.uploadObjectId };
   if (!input.fileId && input.parentId) {
     metadata.parents = [input.parentId];
   }
   const multipart = multipartRelatedBody(metadata, input.body, input.mimeType);
   const response = await fetch(url, {
+    redirect: "manual",
     method: input.fileId ? "PATCH" : "POST",
+    signal: AbortSignal.timeout(60000),
     headers: {
       ...driveHeaders(accessToken),
       "Content-Type": multipart.contentType
@@ -117,6 +123,7 @@ export async function downloadDriveFile(
   const metadataUrl = new URL(`${apiBase(env)}/files/${fileId}`);
   appendSharedDriveParams(metadataUrl);
   const metadataResponse = await fetch(metadataUrl, {
+    redirect: "manual",
     headers: driveHeaders(accessToken)
   });
   if (!metadataResponse.ok) {
@@ -131,6 +138,7 @@ export async function downloadDriveFile(
   url.searchParams.set("alt", "media");
   url.searchParams.set("supportsAllDrives", "true");
   const response = await fetch(url, {
+    redirect: "manual",
     headers: driveHeaders(accessToken)
   });
   if (!response.ok) {
@@ -147,7 +155,9 @@ export async function trashDriveFile(env: Env, accessToken: string, fileId: stri
   const url = new URL(`${apiBase(env)}/files/${fileId}`);
   appendSharedDriveParams(url);
   const response = await fetch(url, {
+    redirect: "manual",
     method: "PATCH",
+    signal: AbortSignal.timeout(60000),
     headers: {
       ...driveHeaders(accessToken),
       "Content-Type": "application/json; charset=UTF-8"
@@ -155,4 +165,109 @@ export async function trashDriveFile(env: Env, accessToken: string, fileId: stri
     body: JSON.stringify({ trashed: true })
   });
   await ensureDriveResponse(response, "Drive file trash");
+}
+
+export type DrivePermissionRole = "reader" | "commenter" | "writer";
+
+export type DrivePermission = {
+  id: string;
+  emailAddress?: string;
+  role?: string;
+  type?: string;
+};
+
+/** project フォルダへユーザー権限を付与 (通知メールなし) */
+export async function createDrivePermission(
+  env: Env,
+  accessToken: string,
+  fileId: string,
+  input: { email: string; role: DrivePermissionRole }
+): Promise<string> {
+  const url = new URL(`${apiBase(env)}/files/${fileId}/permissions`);
+  url.searchParams.set("supportsAllDrives", "true");
+  url.searchParams.set("sendNotificationEmail", "false");
+  url.searchParams.set("fields", "id");
+  const response = await fetch(url, {
+    redirect: "manual",
+    method: "POST",
+    headers: {
+      ...driveHeaders(accessToken),
+      "Content-Type": "application/json; charset=UTF-8"
+    },
+    body: JSON.stringify({
+      type: "user",
+      role: input.role,
+      emailAddress: input.email
+    })
+  });
+  await ensureDriveResponse(response, "Drive permission create");
+  const body = await response.json<{ id: string }>();
+  if (!body.id) {
+    throw new Error("Drive permission create failed: missing id");
+  }
+  return body.id;
+}
+
+/**
+ * 既存 permission の role を更新する。
+ * Authorization: drive.file を含む (公式: permissions.update)
+ * https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions/update
+ */
+export async function updateDrivePermission(
+  env: Env,
+  accessToken: string,
+  fileId: string,
+  permissionId: string,
+  role: DrivePermissionRole
+): Promise<void> {
+  const url = new URL(`${apiBase(env)}/files/${fileId}/permissions/${permissionId}`);
+  url.searchParams.set("supportsAllDrives", "true");
+  url.searchParams.set("fields", "id,role");
+  const response = await fetch(url, {
+    redirect: "manual",
+    method: "PATCH",
+    headers: {
+      ...driveHeaders(accessToken),
+      "Content-Type": "application/json; charset=UTF-8"
+    },
+    body: JSON.stringify({ role })
+  });
+  await ensureDriveResponse(response, "Drive permission update");
+}
+
+/** 付与済み permission を削除。既に無い (404) は成功扱い */
+export async function deleteDrivePermission(
+  env: Env,
+  accessToken: string,
+  fileId: string,
+  permissionId: string
+): Promise<void> {
+  const url = new URL(`${apiBase(env)}/files/${fileId}/permissions/${permissionId}`);
+  url.searchParams.set("supportsAllDrives", "true");
+  const response = await fetch(url, {
+    redirect: "manual",
+    method: "DELETE",
+    headers: driveHeaders(accessToken)
+  });
+  if (response.status === 404) {
+    return;
+  }
+  await ensureDriveResponse(response, "Drive permission delete");
+}
+
+export async function listDrivePermissions(
+  env: Env,
+  accessToken: string,
+  fileId: string
+): Promise<DrivePermission[]> {
+  const url = new URL(`${apiBase(env)}/files/${fileId}/permissions`);
+  url.searchParams.set("supportsAllDrives", "true");
+  url.searchParams.set("fields", "permissions(id,emailAddress,role,type)");
+  const response = await fetch(url, {
+    redirect: "manual",
+    headers: driveHeaders(accessToken)
+  });
+  await ensureDriveResponse(response, "Drive permission list");
+  const body = await response.json<{ permissions?: DrivePermission[] }>();
+  return body.permissions ?? [];
 }

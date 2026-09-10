@@ -1,4 +1,4 @@
-node_modules/
+/node_modules
 .wrangler/
 .DS_Store
 .dev.vars
@@ -8,3 +8,6 @@ tmp/
 output/
 test-results/
 *.log
+
+# 運用環境の設定は公開しない。共有するのは wrangler.toml.example。
+/wrangler.toml

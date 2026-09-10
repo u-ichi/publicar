@@ -3,7 +3,7 @@ import { recordAccessLog } from "../db/access-logs";
 import { getProjectFile } from "../db/project-files";
 import { canViewProject, getProjectByAlias, normalizeFilePath, type Project } from "../db/projects";
 import type { AppBindings } from "../env";
-import { downloadDriveFileWithRetry } from "../lib/drive-retry";
+import { downloadProjectFileWithRetry } from "../lib/drive-retry";
 import { runBackground } from "../lib/run-background";
 import { commentWorkbenchPage } from "./home";
 import { deleteCachedFile, getCachedFile, putCachedFile } from "../storage/r2";
@@ -27,7 +27,8 @@ function contentHeaders(contentType: string, project: Project, options: { review
   const headers: Record<string, string> = {
     "Content-Type": contentType,
     "X-Content-Type-Options": "nosniff",
-    "Cache-Control": "public, max-age=60"
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer"
   };
   if (contentType.includes("text/html")) {
     headers["Content-Security-Policy"] = options.reviewFrame ? REVIEW_HTML_CSP : HTML_CSP;
@@ -49,6 +50,7 @@ function loginRedirect(c: Context<AppBindings>): Response {
 }
 
 export async function serveProject(c: Context<AppBindings>): Promise<Response> {
+  c.header("Cache-Control", "no-store");
   const alias = c.req.param("alias");
   if (!alias) {
     return c.notFound();
@@ -78,7 +80,6 @@ export async function serveProject(c: Context<AppBindings>): Promise<Response> {
   if (!file?.driveFileId) {
     return c.notFound();
   }
-
   const cached = await getCachedFile(c.env, file.r2Key);
   if (cached) {
     if (user && shouldServeCommentWorkbench(c, cached.contentType, { reviewFrame, hasUser: true })) {
@@ -88,7 +89,7 @@ export async function serveProject(c: Context<AppBindings>): Promise<Response> {
   }
 
   const ownerUserId = file.driveOwnerUserId ?? project.createdBy;
-  const driveFile = await downloadDriveFileWithRetry(c.env, ownerUserId, file.driveFileId);
+  const driveFile = await downloadProjectFileWithRetry(c.env, project.id, ownerUserId, file.driveFileId);
   if (driveFile.status === 403 || driveFile.status === 404) {
     await deleteCachedFile(c.env, file.r2Key);
     return c.notFound();

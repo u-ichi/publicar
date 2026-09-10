@@ -31,3 +31,7 @@ id = "00000000000000000000000000000000"
 [[r2_buckets]]
 binding = "CACHE_BUCKET"
 bucket_name = "publicar-cache"
+
+# 監査記録と、サービスアカウントで保存した未参照ファイルの整理。
+[triggers]
+crons = ["0 0 * * *", "15 * * * *"]

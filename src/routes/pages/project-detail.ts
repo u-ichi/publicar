@@ -1,6 +1,12 @@
 import { listDeployEventsWithDeployers, type DeployEventWithDeployer } from "../../db/deploy-events";
 import { listProjectFilesWithDeployers, type ProjectFileWithDeployer } from "../../db/project-files";
-import { getProjectForUser, listProjectMembers, type Project } from "../../db/projects";
+import {
+  getProjectForUser,
+  listProjectAccess,
+  listProjectMembers,
+  type Project,
+  type ProjectAccess
+} from "../../db/projects";
 import type { AppBindings, AuthUser } from "../../env";
 import type { Context } from "hono";
 import { driveFolderUrl, escapeHtml, formatBytes, page, roleBadge, shell, userIdentityHtml, visibilityBadge } from "./layout";
@@ -54,12 +60,73 @@ function memberRows(members: Awaited<ReturnType<typeof listProjectMembers>>): st
     .join("");
 }
 
+function driveRoleLabel(role: string | null): string {
+  if (role === "reader") {
+    return "閲覧のみ";
+  }
+  if (role === "commenter") {
+    return "コメント可";
+  }
+  if (role === "writer") {
+    return "編集可";
+  }
+  return "—";
+}
+
+function accessRows(accessList: ProjectAccess[]): string {
+  if (!accessList.length) {
+    return `<tr><td colspan="5" class="empty">外部コラボレーター招待はまだありません</td></tr>`;
+  }
+  return accessList
+    .map((access) => {
+      const driveCell = access.driveError
+        ? `<span class="status error">${escapeHtml(access.driveError)}</span>`
+        : access.drivePermissionId
+          ? escapeHtml(driveRoleLabel(access.driveRole))
+          : access.driveRole
+            ? escapeHtml(driveRoleLabel(access.driveRole))
+            : "—";
+      return `<tr data-access-id="${escapeHtml(access.id)}">
+  <td class="mono">${escapeHtml(access.email)}</td>
+  <td>${access.userId ? "紐付き済み" : "未ログイン"}</td>
+  <td>${driveCell}</td>
+  <td class="mono">${escapeHtml(access.createdAt)}</td>
+  <td class="right"><button class="button secondary remove-access" type="button">削除</button></td>
+</tr>`;
+    })
+    .join("");
+}
+
+function externalAccessSection(project: Project, accessList: ProjectAccess[]): string {
+  if (project.role !== "owner") {
+    return "";
+  }
+  return `<div class="stack" style="margin-top:24px">
+    <h2>外部コラボレーター招待</h2>
+    <p class="subtle">現在の visibility (${escapeHtml(project.visibility)}) の設定に加えて、ここに追加したメールアドレスの Google アカウントがこの project を閲覧・コメントできます。組織ドメイン外のアドレスも指定できます。Drive フォルダがある場合、選択した権限で共有も連動します (通知メールは送りません)。</p>
+    <form id="access-form" class="row">
+      <label>メールアドレス<input name="email" type="email" required placeholder="guest@example.com"></label>
+      <label>Drive 権限
+        <select name="drive_role">
+          <option value="reader" selected>閲覧のみ (reader)</option>
+          <option value="commenter">コメント可 (commenter)</option>
+          <option value="writer">編集可 (writer)</option>
+        </select>
+      </label>
+      <button class="button" type="submit">招待を追加</button>
+      <div id="access-status" class="status" aria-live="polite"></div>
+    </form>
+    <table><thead><tr><th>メール</th><th>状態</th><th>Drive</th><th>追加日</th><th></th></tr></thead><tbody>${accessRows(accessList)}</tbody></table>
+  </div>`;
+}
+
 function projectDetailPage(
   user: AuthUser,
   project: Project,
   members: Awaited<ReturnType<typeof listProjectMembers>>,
   files: ProjectFileWithDeployer[],
-  deployEvents: DeployEventWithDeployer[]
+  deployEvents: DeployEventWithDeployer[],
+  accessList: ProjectAccess[]
 ): string {
   const previewUrl = `/${project.alias}/`;
   const driveLink = project.driveFolderId
@@ -89,6 +156,7 @@ function projectDetailPage(
 <div class="tabs" role="tablist">
   <button class="tab" type="button" role="tab" aria-selected="true" data-tab="files">ファイル</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="settings">設定</button>
+  ${project.role === "owner" ? '<button class="tab" type="button" role="tab" aria-selected="false" data-tab="uploads">自動アップロード</button>' : ""}
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="members">メンバー</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="history">デプロイ履歴</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="comments">コメント履歴</button>
@@ -132,8 +200,27 @@ function projectDetailPage(
       <div id="member-status" class="status" aria-live="polite"></div>
     </form>
     <table><thead><tr><th>メンバー</th><th>ロール</th><th>追加日</th><th></th></tr></thead><tbody>${memberRows(members)}</tbody></table>
+    ${externalAccessSection(project, accessList)}
   </div>
 </section>
+${project.role === "owner" ? `<section class="tab-panel" id="panel-uploads">
+  <div class="panel stack">
+    <h2>自動アップロード</h2>
+    <p>このプロジェクトの記事だけを更新できるキーを発行します。キーを使える人や自動処理は記事を差し替えられます。</p>
+    <form id="upload-key-form" class="form-grid">
+      <label>キーの名前<input name="name" maxlength="100" required placeholder="例: GitHub Actions"></label>
+      <label>有効期限<input name="expires" type="datetime-local" required></label>
+      <div class="full row"><button class="button" type="submit">キーを発行</button><span id="upload-key-status" class="status" aria-live="polite"></span></div>
+    </form>
+    <div id="upload-key-secret" class="stack" hidden>
+      <p>キーは再表示できません。利用先のSecretに保存してください。</p>
+      <label>発行したキー<textarea id="upload-key-value" readonly spellcheck="false" autocomplete="off"></textarea></label>
+      <button id="hide-upload-key" class="button secondary" type="button">キーを非表示にする</button>
+    </div>
+    <h3>発行済みのキー</h3>
+    <ul id="upload-key-list" class="stack" aria-live="polite"></ul>
+  </div>
+</section>` : ""}
 <section class="tab-panel" id="panel-history">
   <div class="panel stack">
     <h2>デプロイ履歴</h2>
@@ -189,6 +276,7 @@ function activateTab(tabName, updateHash) {
   const nextName = nextTab?.dataset.tab || "files";
   qsa(".tab").forEach((item) => item.setAttribute("aria-selected", String(item === nextTab)));
   qsa(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === "panel-" + nextName));
+  if (nextName === "uploads") loadUploadKeys();
   if (updateHash) history.replaceState(null, "", "#" + nextName);
 }
 function reloadToTab(tabName) {
@@ -198,6 +286,58 @@ function reloadToTab(tabName) {
 qsa(".tab").forEach((tab) => tab.addEventListener("click", () => activateTab(tab.dataset.tab || "files", true)));
 activateTab(location.hash.replace("#", "") || "files", false);
 const aliasInput = qs('input[name="alias"]');
+async function loadUploadKeys() {
+  const list = qs("#upload-key-list");
+  if (!list) return;
+  const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/upload-keys");
+  const payload = await response.json().catch(() => null);
+  list.replaceChildren();
+  if (!response.ok) { list.textContent = "キーの一覧を取得できませんでした。"; return; }
+  if (!payload.keys.length) { list.textContent = "発行済みのキーはありません。"; return; }
+  payload.keys.forEach((key) => {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    const expired = Date.parse(key.expires_at) <= Date.now();
+    label.textContent = key.name + " / 期限: " + new Date(key.expires_at).toLocaleString() + (key.revoked_at ? " / 取消済み" : expired ? " / 期限切れ" : "");
+    item.append(label);
+    if (!key.revoked_at && !expired) {
+      const button = document.createElement("button");
+      button.className = "button secondary"; button.type = "button"; button.textContent = "取消";
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/upload-keys/" + encodeURIComponent(key.id), { method: "DELETE" });
+        if (response.ok) { await loadUploadKeys(); }
+        else { button.disabled = false; setStatus(qs("#upload-key-status"), "キーを取り消せませんでした。", "error"); }
+      });
+      item.append(button);
+    }
+    list.append(item);
+  });
+}
+qs("#upload-key-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const status = qs("#upload-key-status");
+  const date = new Date(form.elements.expires.value);
+  if (!(date.getTime() > Date.now())) { setStatus(status, "未来の有効期限を指定してください。", "error"); return; }
+  button.disabled = true;
+  qs("#upload-key-value").value = ""; qs("#upload-key-secret").hidden = true;
+  try {
+    const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/upload-keys", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: form.elements.name.value, expires_at: date.toISOString() }) });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setStatus(status, response.status === 503 ? "自動アップロードの保存先設定が未完了です。管理者に設定を依頼してください。" : "キーを発行できませんでした。保存先の権限と有効期限を確認してください。", "error");
+      return;
+    }
+    qs("#upload-key-value").value = payload.raw_key; qs("#upload-key-secret").hidden = false;
+    setStatus(status, "キーを発行しました。", "ok");
+    await loadUploadKeys();
+  } catch { setStatus(status, "通信に失敗しました。発行済みの一覧を確認してから再操作してください。", "error"); }
+  finally { button.disabled = false; }
+});
+qs("#hide-upload-key")?.addEventListener("click", () => { qs("#upload-key-value").value = ""; qs("#upload-key-secret").hidden = true; });
 aliasInput?.addEventListener("input", () => {
   const warning = qs("#alias-warning");
   const next = aliasInput.value.trim();
@@ -257,6 +397,30 @@ qsa(".remove-member").forEach((button) => button.addEventListener("click", async
   const row = button.closest("[data-member-user-id]");
   if (!row) return;
   await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/members/" + encodeURIComponent(row.dataset.memberUserId), { method: "DELETE" });
+  reloadToTab("members");
+}));
+qs("#access-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = qs("#access-status");
+  const data = new FormData(event.currentTarget);
+  setStatus(status, "Adding...");
+  const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/access", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: String(data.get("email") || ""), drive_role: String(data.get("drive_role") || "reader") }) });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) { setStatus(status, errorText(payload, "Invite failed"), "error"); return; }
+  reloadToTab("members");
+});
+qsa(".remove-access").forEach((button) => button.addEventListener("click", async () => {
+  const row = button.closest("[data-access-id]");
+  if (!row) return;
+  const status = qs("#access-status");
+  setStatus(status, "Removing...");
+  const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/access/" + encodeURIComponent(row.dataset.accessId), { method: "DELETE" });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = payload && payload.drive_error ? String(payload.drive_error) : errorText(payload, "Remove failed");
+    setStatus(status, detail, "error");
+    return;
+  }
   reloadToTab("members");
 }));
 qsa(".remove-file").forEach((button) => button.addEventListener("click", async () => {
@@ -502,10 +666,11 @@ export async function projectDetail(c: Context<AppBindings>): Promise<Response> 
   if (!project) {
     return c.notFound();
   }
-  const [members, files, deployEvents] = await Promise.all([
+  const [members, files, deployEvents, accessList] = await Promise.all([
     listProjectMembers(c.env, project.id),
     listProjectFilesWithDeployers(c.env, project.id),
-    listDeployEventsWithDeployers(c.env, project.id)
+    listDeployEventsWithDeployers(c.env, project.id),
+    project.role === "owner" ? listProjectAccess(c.env, project.id) : Promise.resolve([])
   ]);
-  return c.html(page(`${project.title} - publicar`, projectDetailPage(user, project, members, files, deployEvents)));
+  return c.html(page(`${project.title} - publicar`, projectDetailPage(user, project, members, files, deployEvents, accessList)));
 }
