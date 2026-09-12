@@ -9,6 +9,31 @@ describe("project upload keys", () => {
   beforeEach(async () => resetDatabase(testEnv()));
   afterEach(() => vi.unstubAllGlobals());
 
+  it("checks 93 existing files across requests and issues no key before all are checked", async () => {
+    const env = await serviceEnv();
+    const cookie = await authCookie(env);
+    const project = await createProject(env, user, { title: "Many", alias: "many", visibility: "private" });
+    await updateProject(env, project.id, { driveFolderId: "folder_auto" });
+    for (let i = 0; i < 93; i++) await upsertProjectFile(env, { projectId: project.id, path: `${i}.html`,
+      driveFileId: `legacy-${i}`, driveOwnerUserId: user.id, sizeBytes: 1, contentHash: "old",
+      mimeType: "text/html", driveModifiedTime: null, cacheEtag: null });
+    const { mock } = mockServiceDrive();
+    const body = JSON.stringify({ name: "Actions", expires_at: new Date(Date.now() + 86400000).toISOString() });
+    for (let i = 0; i < 93; i++) {
+      mock.mockClear();
+      const response = await app.fetch(new Request(`http://localhost/api/v1/projects/${project.id}/upload-keys`, {
+        method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body
+      }), env);
+      expect(mock.mock.calls.length).toBeLessThanOrEqual(5);
+      expect(response.status).toBe(i === 92 ? 201 : 202);
+      if (i < 92) {
+        expect(await response.json()).toEqual({ status: "preparing" });
+        expect(await env.DB.prepare("SELECT 1 FROM upload_keys").first()).toBeNull();
+      }
+    }
+    expect(await env.DB.prepare("SELECT count(*) AS n FROM upload_keys").first()).toEqual({ n: 1 });
+  });
+
   it("requires a service account and never creates a key backed by the owner's Google tokens", async () => {
     const env = testEnv();
     const cookie = await authCookie(env);
@@ -66,7 +91,7 @@ describe("project upload keys", () => {
     expect(creates).toHaveLength(1);
     expect(JSON.parse(String(creates[0][1]?.body))).toMatchObject({ parents: ["folder_root"] });
     expect(await env.DB.prepare("SELECT drive_folder_id, storage_service_account, storage_transition_id FROM projects WHERE id = ?").bind(project.id).first())
-      .toEqual({ drive_folder_id: "folder_auto", storage_service_account: SERVICE_EMAIL, storage_transition_id: null });
+      .toEqual({ drive_folder_id: expect.stringMatching(/^generated_/), storage_service_account: SERVICE_EMAIL, storage_transition_id: null });
   });
 
   it("does not switch an unrelated manual-upload project just because SA credentials exist", async () => {
@@ -123,4 +148,32 @@ describe("project upload keys", () => {
     expect(await env.DB.prepare("SELECT 1 FROM upload_keys").first()).toBeNull();
     expect(await env.DB.prepare("SELECT storage_service_account, storage_transition_id FROM projects WHERE id = ?").bind(project.id).first()).toEqual({ storage_service_account: null, storage_transition_id: null });
   });
+  it("resumes after a transient check failure and restarts after the preparation expires", async () => {
+    const env = await serviceEnv();
+    const cookie = await authCookie(env);
+    const project = await createProject(env, user, { title: "Resume", alias: "resume", visibility: "private" });
+    await updateProject(env, project.id, { driveFolderId: "folder_auto" });
+    for (let i = 0; i < 3; i++) await upsertProjectFile(env, { projectId: project.id, path: `${i}.html`, driveFileId: `existing-${i}`,
+      driveOwnerUserId: user.id, sizeBytes: 1, contentHash: "old", mimeType: "text/html", driveModifiedTime: null, cacheEtag: null });
+    const body = JSON.stringify({ name: "Actions", expires_at: new Date(Date.now() + 86400000).toISOString() });
+    const issue = () => app.fetch(new Request(`http://localhost/api/v1/projects/${project.id}/upload-keys`, {
+      method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body
+    }), env);
+    mockServiceDrive();
+    expect((await issue()).status).toBe(202);
+    const before = await env.DB.prepare("SELECT storage_transition_id, storage_preparation_after_id FROM projects").first();
+    mockServiceDrive({ onMetadata: async () => { throw new Error("Drive location lookup failed with 503"); } });
+    expect((await issue()).status).toBe(502);
+    expect(await env.DB.prepare("SELECT storage_transition_id, storage_preparation_after_id FROM projects").first()).toEqual(before);
+    mockServiceDrive();
+    expect((await issue()).status).toBe(202);
+    await env.DB.prepare("UPDATE projects SET storage_transition_until = 1").run();
+    expect((await issue()).status).toBe(202);
+    const restarted = await env.DB.prepare("SELECT storage_transition_id, storage_preparation_after_id FROM projects").first();
+    expect(restarted?.storage_transition_id).not.toBe(before?.storage_transition_id);
+    expect(restarted?.storage_preparation_after_id).toBe(before?.storage_preparation_after_id);
+    expect((await issue()).status).toBe(202);
+    expect((await issue()).status).toBe(201);
+  });
+
 });

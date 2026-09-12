@@ -6,6 +6,7 @@ export function driveFailureResponse(c: Context<AppBindings>, error: unknown): R
     return null;
   }
   const message = error.message;
+  if (message === "drive_object_mismatch") return c.json({ error: message }, 409);
   if (message === "project_owner_required") return c.json({ error: message }, 403);
   if (message === "service_account_not_configured" || message === "service_account_mismatch" || message === "service_account_root_not_configured") return c.json({ error: message }, 503);
   if (message === "service_account_location_denied") return c.json({ error: message }, 403);

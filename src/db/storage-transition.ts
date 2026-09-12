@@ -7,7 +7,7 @@ export async function beginLegacyStorageOperation(env: Env, projectId: string): 
   const now = Date.now();
   const operation = { id: randomId("legacy"), deadline: now + 5 * 60000 };
   const results = await env.DB.batch([
-    env.DB.prepare("UPDATE projects SET storage_transition_id = NULL, storage_transition_until = NULL WHERE id = ? AND storage_transition_until < ?").bind(projectId, now),
+    env.DB.prepare("UPDATE projects SET storage_transition_id = NULL, storage_transition_until = NULL, storage_preparation_folder_id = NULL, storage_preparation_source_folder_id = NULL, storage_preparation_account = NULL, storage_preparation_after_id = NULL WHERE id = ? AND storage_transition_until < ?").bind(projectId, now),
     env.DB.prepare(`INSERT INTO legacy_storage_operations (id, project_id, expires_at) SELECT ?, id, ? FROM projects
       WHERE id = ? AND storage_service_account IS NULL AND storage_transition_id IS NULL`)
       .bind(operation.id, now + 10 * 60000, projectId)

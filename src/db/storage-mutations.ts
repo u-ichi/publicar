@@ -31,9 +31,9 @@ export async function removeServiceAccountProject(env: Env, projectId: string, u
       SELECT 'cleanup_' || id, project_id, ?, ?, drive_file_id, r2_key, ?, ? FROM project_files WHERE project_id = ? AND ${authorized}
       ON CONFLICT(r2_key) DO NOTHING`)
       .bind(storage.active_revision_id ?? "legacy", storage.drive_folder_id, storage.storage_service_account, Date.now(), projectId, projectId, userId),
-    env.DB.prepare(`INSERT INTO drive_cleanup_folders (drive_folder_id, service_account, created_at) SELECT ?, ?, ? WHERE ${authorized}
+    env.DB.prepare(`INSERT INTO drive_cleanup_folders (drive_folder_id, service_account, created_at, parent_id, operation_id) SELECT ?, ?, ?, ?, ? WHERE ${authorized}
       ON CONFLICT(drive_folder_id) DO NOTHING`)
-      .bind(storage.drive_folder_id, storage.storage_service_account, Date.now(), projectId, userId),
+      .bind(storage.drive_folder_id, storage.storage_service_account, Date.now(), storage.storage_folder_parent_id, storage.storage_folder_object_id, projectId, userId),
     env.DB.prepare(`DELETE FROM projects WHERE id = ? AND ${authorized}`).bind(projectId, projectId, userId)
   ]);
   if (!results[2].meta.changes) throw new Error("project_storage_changed");

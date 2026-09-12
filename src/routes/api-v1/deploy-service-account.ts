@@ -41,10 +41,10 @@ export async function deployServiceAccount(c: Context<AppBindings>): Promise<Res
     const contentHash = bytesToBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", body)));
     const requestHash = await sha256Base64Url(JSON.stringify({ contentHash, isZip, path: isZip ? null : c.req.query("path") ?? null, contentType }));
     const priorResult = async (): Promise<Response | null> => {
-      const prior = await c.env.DB.prepare("SELECT request_hash, response_json FROM project_revisions WHERE project_id = ? AND actor_id = ? AND request_id = ?")
-        .bind(projectId, actor, requestId).first<{ request_hash: string; response_json: string }>();
+      const prior = await c.env.DB.prepare("SELECT request_hash, response_json, published_at FROM project_revisions WHERE project_id = ? AND actor_id = ? AND request_id = ?")
+        .bind(projectId, actor, requestId).first<{ request_hash: string; response_json: string | null; published_at: number | null }>();
       if (!prior) return null;
-      return prior.request_hash === requestHash ? c.json(JSON.parse(prior.response_json)) : c.json({ error: "idempotency_conflict" }, 409);
+      return prior.published_at !== null && prior.response_json && prior.request_hash === requestHash ? c.json(JSON.parse(prior.response_json)) : c.json({ error: "idempotency_conflict" }, 409);
     };
     const prior = await priorResult();
     if (prior) return prior;

@@ -16,6 +16,8 @@ import accessDriveMigration from "../../migrations/0010_access_drive.sql?raw";
 import organizationSecurityMigration from "../../migrations/0011_organization_security.sql?raw";
 import serviceAccountMigration from "../../migrations/0012_service_account_uploads.sql?raw";
 
+import uploadBatchesMigration from "../../migrations/0013_upload_batches.sql?raw";
+
 export type { AuthUser, Env };
 
 export function testEnv(overrides: Partial<Env> = {}): Env {
@@ -100,6 +102,7 @@ async function ensureSchema(localEnv: Env): Promise<void> {
   await executeMigration(localEnv, accessDriveMigration);
   await executeMigration(localEnv, organizationSecurityMigration);
   await executeMigration(localEnv, serviceAccountMigration);
+  await executeMigration(localEnv, uploadBatchesMigration);
   schemaReady = true;
 }
 

@@ -52,13 +52,14 @@ function multipartRelatedBody(metadata: unknown, body: ArrayBuffer, mimeType: st
   };
 }
 
-export async function createDriveFolder(env: Env, accessToken: string, name: string, parentId = env.TEAM_DRIVE_ID): Promise<DriveFile> {
+export async function createDriveFolder(env: Env, accessToken: string, name: string, parentId = env.TEAM_DRIVE_ID, creation?: { id: string; operationId: string }): Promise<DriveFile> {
   const url = new URL(`${apiBase(env)}/files`);
   appendSharedDriveParams(url);
   const metadata: Record<string, unknown> = {
     name,
     mimeType: FOLDER_MIME_TYPE
   };
+  if (creation) { metadata.id = creation.id; metadata.appProperties = { publicar_upload_object: creation.operationId }; }
   if (parentId) {
     metadata.parents = [parentId];
   }
@@ -81,6 +82,7 @@ export async function uploadDriveFile(
   accessToken: string,
   input: {
     fileId?: string | null;
+    createId?: string;
     parentId?: string | null;
     name: string;
     mimeType: string;
@@ -96,6 +98,7 @@ export async function uploadDriveFile(
     name: input.name,
     mimeType: input.mimeType
   };
+  if (input.createId) metadata.id = input.createId;
   if (input.uploadObjectId) metadata.appProperties = { publicar_upload_object: input.uploadObjectId };
   if (!input.fileId && input.parentId) {
     metadata.parents = [input.parentId];
