@@ -122,7 +122,7 @@ app.get("/:alias/:path{.*}", serveProject);
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    if (event.cron === "15 * * * *") {
+    if ((event.cron === "* * * * *" || event.cron === "15 * * * *")) {
       ctx.waitUntil(cleanupUploads(env));
       return;
     }

@@ -324,13 +324,18 @@ qs("#upload-key-form")?.addEventListener("submit", async (event) => {
   button.disabled = true;
   qs("#upload-key-value").value = ""; qs("#upload-key-secret").hidden = true;
   try {
-    const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/upload-keys", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: form.elements.name.value, expires_at: date.toISOString() }) });
-    const payload = await response.json().catch(() => null);
+    const body = JSON.stringify({ name: form.elements.name.value, expires_at: date.toISOString() });
+    let response, payload;
+    do {
+      setStatus(status, "保存先と既存ファイルを確認しています。", "");
+      response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/upload-keys", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      payload = await response.json();
+    } while (response.status === 202 && payload.status === "preparing");
     if (!response.ok) {
       setStatus(status, response.status === 503 ? "自動アップロードの保存先設定が未完了です。管理者に設定を依頼してください。" : "キーを発行できませんでした。保存先の権限と有効期限を確認してください。", "error");
       return;
     }
+    if (response.status !== 201 || !payload.raw_key) throw new Error("invalid_response");
     qs("#upload-key-value").value = payload.raw_key; qs("#upload-key-secret").hidden = false;
     setStatus(status, "キーを発行しました。", "ok");
     await loadUploadKeys();

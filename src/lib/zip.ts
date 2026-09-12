@@ -31,7 +31,7 @@ const MIME_MAP: Record<string, string> = {
   ".md": "text/markdown"
 };
 
-function mimeFromPath(path: string): string {
+export function mimeFromPath(path: string): string {
   const extStart = path.lastIndexOf(".");
   if (extStart < 0) {
     return "application/octet-stream";
@@ -95,7 +95,7 @@ export function extractZip(buffer: ArrayBuffer, limits = { bytes: 20 * 1024 * 10
   return entries;
 }
 
-export function determineEntryPath(entries: ZipEntry[]): string | null {
+export function determineEntryPath(entries: Array<{ path: string }>): string | null {
   const indexHtml = entries.find((entry) => entry.path === "index.html");
   if (indexHtml) {
     return "index.html";

@@ -35,7 +35,8 @@ uploadKeysRoute.post("/:id/upload-keys", async (c) => {
     return c.json({ error: "invalid_upload_key" }, 400);
   }
   try {
-    await enableServiceAccountStorage(c.env, c.req.param("id"), c.get("user").id);
+    const storage = await enableServiceAccountStorage(c.env, c.req.param("id"), c.get("user").id);
+    if (!storage) return c.json({ status: "preparing" }, 202);
     c.set("driveServiceAccount", c.env.GOOGLE_SERVICE_ACCOUNT_EMAIL!);
     const issued = await createUploadKey(c.env, { projectId: c.req.param("id"), name: body.name.trim(), createdBy: c.get("user").id,
       expiresAt: new Date(body.expires_at).toISOString() });

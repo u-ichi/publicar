@@ -158,21 +158,32 @@ const SPEC = {
     "/api/v1/projects/{id}/deploy": {
       post: {
         summary: "ファイルデプロイ",
-        description: "pathで単一ファイルを更新、name=*.zipでファイル一覧全体を置換する。サービスアカウントの保存では全ファイルを保存してから公開版を一括確定する。",
+        description: "pathで単一ファイルを更新、name=*.zipでファイル一覧全体を置換する。サービスアカウントの保存では全ファイルを保存してから公開版を一括確定する。stage=startで一覧を登録、stage=file&path=...で一件の生データを送信、stage=completeで公開確定する。分割送信は同じIdempotency-Keyが必須で、開始から15分以内に完了する。",
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "string" } },
           { name: "path", in: "query", schema: { type: "string" }, description: "単一ファイルのパス" },
           { name: "name", in: "query", schema: { type: "string" }, description: "ZIP ファイル名 (*.zip)" },
+          { name: "stage", in: "query", schema: { type: "string", enum: ["start", "file", "complete"] }, description: "分割送信の段階。completeの本文は空。stage指定時にnameは使用しない" },
           { name: "Idempotency-Key", in: "header", schema: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" }, description: "アップロード専用キーでは必須。同一プロジェクト・キー・要求IDの再送は同一内容の場合に確定済み結果を返す" }
         ],
         requestBody: {
-          required: true,
+          required: false,
           content: {
             "text/html": { schema: { type: "string" } },
-            "application/zip": { schema: { type: "string", format: "binary" } }
+            "application/zip": { schema: { type: "string", format: "binary" } },
+            "application/octet-stream": { schema: { type: "string", format: "binary" }, description: "stage=fileの生データ" },
+            "application/json": { schema: { type: "object", additionalProperties: false, required: ["files"], properties: {
+              files: { type: "array", minItems: 1, maxItems: 200, items: { type: "object", additionalProperties: false,
+                required: ["path", "size_bytes", "content_hash"], properties: {
+                  path: { type: "string", description: "UTF-8で512byte以内の相対パス" },
+                  size_bytes: { type: "integer", minimum: 0, maximum: 5242880 },
+                  content_hash: { type: "string", pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$", description: "SHA-256のURL-safe Base64、末尾の=なし" }
+                } } }
+            } }, description: "stage=startのファイル一覧。JSONは128KiBまで" }
           }
         },
-        responses: { "200": { description: "公開確定または同一要求の確定済み結果。サービスアカウント保存ではrevision_idも返す" },
+        responses: { "200": { description: "ファイル保存、開始要求の再送、公開確定または確定済み結果" },
+          "201": { description: "分割送信を開始。revision_idとstatus: uploadingを返す" }, "404": { description: "指定した送信者と要求IDの更新がない" }, "410": { description: "未公開の送信期限切れ。同じ要求IDは再利用できない" },
           "400": { description: "要求ID、パス、ZIPなどの入力が不正" }, "401": { description: "キーが無効・失効・期限切れ" },
           "403": { description: "対象または操作が許可されていない" }, "409": { description: "同時更新、または同一要求IDで異なる内容" },
           "413": { description: "受信・展開容量またはファイル件数の上限超過" }, "502": { description: "保存失敗。現在の公開版は維持する" }, "503": { description: "サービスアカウントの設定不足・不一致" } }
@@ -344,7 +355,7 @@ const SPEC = {
         requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["name", "expires_at"], properties: {
           name: { type: "string", minLength: 1, maxLength: 100 }, expires_at: { type: "string", format: "date-time", description: "未来のUTC日時。必須。自動延長なし" }
         } } } } },
-        responses: { "201": { description: "keyにメタデータ、raw_keyに一度だけ返す原文" }, "400": { description: "入力不正、または保存先フォルダ未作成" },
+        responses: { "201": { description: "keyにメタデータ、raw_keyに一度だけ返す原文" }, "202": { description: "status: preparing。同じ入力のPOSTで次の既存ファイルを確認する" }, "400": { description: "入力不正、または保存先フォルダ未作成" },
           "403": { description: "所有者でない、またはGoogle保存先の権限が不足" }, "503": { description: "サービスアカウント設定が未完了" } }
       }
     },

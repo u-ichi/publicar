@@ -34,4 +34,4 @@ bucket_name = "publicar-cache"
 
 # 監査記録と、サービスアカウントで保存した未参照ファイルの整理。
 [triggers]
-crons = ["0 0 * * *", "15 * * * *"]
+crons = ["0 0 * * *", "* * * * *"]

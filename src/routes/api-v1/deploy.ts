@@ -12,6 +12,7 @@ import { deleteCachedFile, putCachedFile } from "../../storage/r2";
 import { driveFailureResponse } from "./drive-errors";
 import { roleErrorResponse } from "./guards";
 import { getProjectStorage } from "../../storage/service-account-drive";
+import { deployBatches } from "./deploy-batches";
 import { deployServiceAccount } from "./deploy-service-account";
 import { beginLegacyStorageOperation, assertLegacyStorageOperation, finishLegacyStorageOperation } from "../../db/storage-transition";
 import { boundedUploadBody, UploadInputError } from "../../lib/upload-body";
@@ -143,6 +144,7 @@ function normalizeZipEntries(entries: ZipEntry[]): Array<ZipEntry & { path: stri
 }
 
 export async function deployProject(c: Context<AppBindings>): Promise<Response> {
+  if (c.req.query("stage") !== undefined) return deployBatches(c);
   const storage = await getProjectStorage(c.env, c.req.param("id")!);
   if (c.get("uploadKey") || storage?.storage_service_account) return deployServiceAccount(c);
   if (!storage) return c.json({ error: "not_found" }, 404);
