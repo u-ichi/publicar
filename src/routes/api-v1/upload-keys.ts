@@ -42,7 +42,12 @@ uploadKeysRoute.post("/:id/upload-keys", async (c) => {
     c.set("auditedUploadKeyId", issued.key.id);
     return c.json(issued, 201);
   } catch (error) {
-    return driveFailureResponse(c, error) ?? c.json({ error: "upload_key_create_failed" }, 502);
+    const response = driveFailureResponse(c, error);
+    if (response) return response;
+    let diagnostic = "unknown_error";
+    if (error instanceof Error) diagnostic = error.name === "SyntaxError" ? error.name : error.message;
+    console.error("upload_key_internal_error", diagnostic);
+    return c.json({ error: "upload_key_create_failed" }, 502);
   }
 });
 
