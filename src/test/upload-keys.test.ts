@@ -32,7 +32,7 @@ describe("project upload keys", () => {
       }
     }
     expect(await env.DB.prepare("SELECT count(*) AS n FROM upload_keys").first()).toEqual({ n: 1 });
-  });
+  }, 30_000); // CIでは93件の逐次確認に既定の5秒を超えることがある。
 
   it("requires a service account and never creates a key backed by the owner's Google tokens", async () => {
     const env = testEnv();
