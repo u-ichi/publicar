@@ -1,26 +1,35 @@
 # 既存の文書生成jobのstepsへ追加する例。単体のworkflowではありません。
 # Variables: PUBLICAR_ENDPOINT, PUBLICAR_PROJECT_ID
 # Secret: 対象プロジェクトのアップロード専用キーをPUBLICAR_DEPLOY_KEYへ保存
+# 前提: 対象プロジェクトでサービスアカウントによる保存を準備済みであること。
+# 生成・検査済みのdist/docs.zipを公開ファイル一式として送信します。
+# .publicar-clientをZIPへ含めず、利用側repoの.gitignoreへ追加してください。
+# 既存jobの同時実行制御と送信直前のmain一致確認は維持してください。
+# 詳細: https://github.com/u-ichi/publicar-skill/blob/6b95e10ee8ba922e15aef5286377400440e13feb/skills/publicar-deploy/references/ci-upload.md
+- name: Pythonを用意
+  uses: actions/setup-python@v6
+  with:
+    python-version: '3.12'
+
+- name: publicarの送信CLIを取得
+  uses: actions/checkout@v5
+  with:
+    repository: u-ichi/publicar-skill
+    ref: '6b95e10ee8ba922e15aef5286377400440e13feb'
+    path: .publicar-client
+    sparse-checkout: skills/publicar-deploy/scripts/upload_publicar.py
+    sparse-checkout-cone-mode: false
+    persist-credentials: false
+
 - name: 文書をpublicarへアップロード
   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
   env:
     PUBLICAR_ENDPOINT: ${{ vars.PUBLICAR_ENDPOINT }}
     PUBLICAR_PROJECT_ID: ${{ vars.PUBLICAR_PROJECT_ID }}
     PUBLICAR_DEPLOY_KEY: ${{ secrets.PUBLICAR_DEPLOY_KEY }}
-    PUBLICAR_ARTIFACT: dist/docs.zip
   shell: bash
   run: |
     set -euo pipefail
-    : "${PUBLICAR_ENDPOINT:?}" "${PUBLICAR_PROJECT_ID:?}" "${PUBLICAR_DEPLOY_KEY:?}"
-    test -f "$PUBLICAR_ARTIFACT"
-    curl --fail-with-body --silent --show-error \
-      --retry 3 --retry-delay 2 \
-      --request POST \
-      --header "Authorization: Bearer $PUBLICAR_DEPLOY_KEY" \
-      --header "Idempotency-Key: gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-      --header "Content-Type: application/zip" \
-      --header "X-Publicar-Repository: $GITHUB_REPOSITORY" \
-      --header "X-Publicar-Commit: $GITHUB_SHA" \
-      --header "X-Publicar-Run-Id: $GITHUB_RUN_ID" \
-      --data-binary "@$PUBLICAR_ARTIFACT" \
-      "${PUBLICAR_ENDPOINT%/}/api/v1/projects/$PUBLICAR_PROJECT_ID/deploy?name=docs.zip"
+    python3 -B .publicar-client/skills/publicar-deploy/scripts/upload_publicar.py \
+      --archive dist/docs.zip \
+      --result tmp/publicar/result.json

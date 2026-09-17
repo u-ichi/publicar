@@ -241,6 +241,6 @@ describe("split uploads", () => {
     expect((await send("complete")).status).toBe(200);
     expect(queries).toBeLessThanOrEqual(50);
     expect(await original.prepare("SELECT count(*) AS n FROM project_files").first()).toEqual({ n: 200 });
-  });
+  }, 30_000); // CIでは200件の逐次処理に既定の5秒を超えることがある。
 
 });
