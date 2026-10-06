@@ -7,6 +7,7 @@ import { verifyDriveObject } from "./drive-objects";
 type UploadObject = { id: string; project_id: string; drive_folder_id: string; drive_file_id: string | null; r2_key: string;
   service_account: string; operation_id: string | null; search_page_token: string | null; search_found_in_use: number };
 export const CLEANUP_DELAY_MS = 60 * 60 * 1000;
+// Free プランの1回の実行で使える subrequest（50回）に収まる件数。1件で D1・Drive・R2 を約7回呼ぶ
 const CLEANUP_LIMIT = 5;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
 

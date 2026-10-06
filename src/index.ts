@@ -21,7 +21,7 @@ import { organizationRoute } from "./routes/api-v1/organization";
 import { uploadKeysRoute } from "./routes/api-v1/upload-keys";
 import { serveProject } from "./routes/serve";
 import { cleanupUploads } from "./storage/upload-cleanup";
-import { syncDriveMembersIfDue } from "./storage/drive-members";
+import { syncDriveMembersIfConfigured } from "./storage/drive-members";
 import { driveMembersRoute } from "./routes/api-v1/drive-members";
 import { llmsTxt } from "./routes/wellknown";
 
@@ -120,9 +120,12 @@ export { app };
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    if ((event.cron === "* * * * *" || event.cron === "15 * * * *")) {
+    if (event.cron === "0 * * * *") {
       ctx.waitUntil(cleanupUploads(env));
-      ctx.waitUntil(syncDriveMembersIfDue(env));
+      return;
+    }
+    if (event.cron === "*/15 * * * *") {
+      ctx.waitUntil(syncDriveMembersIfConfigured(env));
       return;
     }
     const days = parseInt(env.ACCESS_LOG_RETENTION_DAYS ?? "90", 10);

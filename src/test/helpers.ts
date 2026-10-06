@@ -19,6 +19,7 @@ import serviceAccountMigration from "../../migrations/0012_service_account_uploa
 import uploadBatchesMigration from "../../migrations/0013_upload_batches.sql?raw";
 import apiKeysAsUserMigration from "../../migrations/0014_api_keys_as_user.sql?raw";
 import projectRolesMigration from "../../migrations/0015_project_roles.sql?raw";
+import cleanupLookupIndexesMigration from "../../migrations/0016_cleanup_lookup_indexes.sql?raw";
 
 export type { AuthUser, Env };
 
@@ -107,6 +108,7 @@ async function ensureSchema(localEnv: Env): Promise<void> {
   await executeMigration(localEnv, uploadBatchesMigration);
   await executeMigration(localEnv, apiKeysAsUserMigration);
   await executeMigration(localEnv, projectRolesMigration);
+  await executeMigration(localEnv, cleanupLookupIndexesMigration);
   schemaReady = true;
 }
 
