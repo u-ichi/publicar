@@ -1,5 +1,5 @@
 import type { AuthUser, Env } from "../env";
-import { emailDomain, jsonArray } from "../lib/http";
+import { jsonArray } from "../lib/http";
 import { randomId } from "../lib/id";
 
 export const VISIBILITIES = ["private", "invite", "domain", "group", "link", "public"] as const;
@@ -142,10 +142,10 @@ export function aliasFromTitle(title: string): string {
 
 export async function listProjectsForUser(env: Env, userId: string): Promise<Project[]> {
   const result = await env.DB.prepare(
-    `SELECT p.*, pm.role
+    `SELECT p.*, r.role
      FROM projects p
-     JOIN project_members pm ON pm.project_id = p.id
-     WHERE pm.user_id = ?
+     JOIN project_roles r ON r.project_id = p.id
+     WHERE r.user_id = ?
      ORDER BY p.updated_at DESC`
   )
     .bind(userId)
@@ -206,10 +206,10 @@ export async function createProject(
 
 export async function getProjectForUser(env: Env, id: string, userId: string): Promise<Project | null> {
   const row = await env.DB.prepare(
-    `SELECT p.*, pm.role
+    `SELECT p.*, r.role
      FROM projects p
-     JOIN project_members pm ON pm.project_id = p.id
-     WHERE p.id = ? AND pm.user_id = ?`
+     JOIN project_roles r ON r.project_id = p.id
+     WHERE p.id = ? AND r.user_id = ?`
   )
     .bind(id, userId)
     .first<ProjectRow>();
@@ -231,6 +231,14 @@ export async function getProjectByAlias(env: Env, alias: string): Promise<Projec
 }
 
 export async function getProjectRole(env: Env, projectId: string, userId: string): Promise<ProjectRole | null> {
+  const row = await env.DB.prepare("SELECT role FROM project_roles WHERE project_id = ? AND user_id = ?")
+    .bind(projectId, userId)
+    .first<{ role: ProjectRole }>();
+  return row?.role ?? null;
+}
+
+// メンバー表に記録された役割。通知の宛先と最後の owner の維持に使い、権限の判定には getProjectRole を使う
+export async function getProjectMemberRole(env: Env, projectId: string, userId: string): Promise<ProjectRole | null> {
   const row = await env.DB.prepare("SELECT role FROM project_members WHERE project_id = ? AND user_id = ?")
     .bind(projectId, userId)
     .first<{ role: ProjectRole }>();
@@ -569,20 +577,11 @@ export async function canViewProject(env: Env, project: Project, user: AuthUser 
   if (!user) {
     return false;
   }
-  const role = await getProjectRole(env, project.id, user.id);
-  if (role) {
+  // 組織の利用者は共有ドライブと同じく全プロジェクトを見られる。社外の利用者は招待されたものだけ
+  if (await getProjectRole(env, project.id, user.id)) {
     return true;
   }
-  // 個別招待は visibility に依らない追加許可。
-  // domain 認証を保ったまま社外コラボレーターを 1 名ずつ足す用途がこれに当たる。
-  if (await hasProjectAccessGrant(env, project.id, user)) {
-    return true;
-  }
-  if (project.visibility === "domain") {
-    const domain = emailDomain(user.email);
-    return !!domain && project.allowedDomains.map((item) => item.toLowerCase()).includes(domain);
-  }
-  return false;
+  return hasProjectAccessGrant(env, project.id, user);
 }
 
 export function canEditProject(role: ProjectRole | null): boolean {

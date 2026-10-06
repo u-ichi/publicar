@@ -43,7 +43,7 @@ describe("project access invite + guest boundary", () => {
     await resetDatabase(testEnv());
   });
 
-  it("allows owner to add, list, and delete project access; rejects editor/viewer", async () => {
+  it("lets organization members manage project access and rejects guests", async () => {
     const localEnv = testEnv();
     const ownerCookie = await authCookie(localEnv);
     await seedUser(localEnv, editorUser);
@@ -57,12 +57,13 @@ describe("project access invite + guest boundary", () => {
       userId: editorUser.id,
       role: "editor"
     });
-    const editorCookie = await createSession(localEnv, editorUser);
 
+    // メンバー表にいない組織の利用者も、共有ドライブと同じく招待を管理できる
+    const otherMemberCookie = await authCookie(localEnv, { ...editorUser, id: "user_other", googleId: "google_other", email: "other@example.com" });
     const createRes = await app.fetch(
       new Request(`http://localhost/api/v1/projects/${project.id}/access`, {
         method: "POST",
-        headers: { Cookie: ownerCookie, "Content-Type": "application/json" },
+        headers: { Cookie: otherMemberCookie, "Content-Type": "application/json" },
         body: JSON.stringify({ email: "  Guest@Gmail.com  " })
       }),
       localEnv
@@ -84,15 +85,15 @@ describe("project access invite + guest boundary", () => {
     const listed = (await listRes.json()) as { access: Array<{ email: string }> };
     expect(listed.access.map((a) => a.email)).toEqual(["guest@gmail.com"]);
 
-    const editorCreate = await app.fetch(
+    const guestCreate = await app.fetch(
       new Request(`http://localhost/api/v1/projects/${project.id}/access`, {
         method: "POST",
-        headers: { Cookie: editorCookie, "Content-Type": "application/json" },
+        headers: { Cookie: await authCookie(localEnv, guestUser), "Content-Type": "application/json" },
         body: JSON.stringify({ email: "other@gmail.com" })
       }),
       localEnv
     );
-    expect(editorCreate.status).toBe(403);
+    expect(guestCreate.status).toBe(403);
 
     const deleteRes = await app.fetch(
       new Request(`http://localhost/api/v1/projects/${project.id}/access/${created.access.id}`, {
@@ -104,6 +105,13 @@ describe("project access invite + guest boundary", () => {
     expect(deleteRes.status).toBe(200);
     const after = await listProjectAccess(localEnv, project.id);
     expect(after).toHaveLength(0);
+
+    // メンバー表の editor は、owner が1人でも削除できる（記録上の role で最後の owner を判定する）
+    const removeEditor = await app.fetch(
+      new Request(`http://localhost/api/v1/projects/${project.id}/members/${editorUser.id}`, { method: "DELETE", headers: { Cookie: ownerCookie } }),
+      localEnv
+    );
+    expect(removeEditor.status).toBe(200);
   });
 
   it("rejects invalid email formats on access POST", async () => {
@@ -268,6 +276,7 @@ describe("project access invite + guest boundary", () => {
       avatarUrl: null,
       kind: "guest"
     };
+    await seedUser(localEnv, insider);
 
     // domain 認証の閲覧は維持され、招待した社外 1 名も見える。招待外は見えない
     await expect(canViewProject(localEnv, project, insider)).resolves.toBe(true);

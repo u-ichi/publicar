@@ -5,7 +5,7 @@ import { upsertProjectFile } from "../db/project-files";
 import { createProject, updateProject, upsertProjectMember } from "../db/projects";
 import app from "../index";
 import { getValidAccessToken } from "../lib/token-refresh";
-import { authCookie, avatarUser, editorUser, jsonResponse, mockDriveUploads, resetDatabase, seedUser, testEnv, user, type Env } from "./helpers";
+import { authCookie, avatarUser, editorUser, guestUser, jsonResponse, mockDriveUploads, resetDatabase, seedUser, testEnv, user, type Env } from "./helpers";
 
 describe("publicar worker", () => {
   beforeEach(async () => {
@@ -83,7 +83,7 @@ describe("publicar worker", () => {
     expect(html).toContain("Detail Project");
     expect(html).toContain("ファイル");
     expect(html).toContain("設定");
-    expect(html).toContain("メンバー");
+    expect(html).toContain("社外の招待");
     expect(html).toContain("デプロイ履歴");
     expect(html).toContain("コメント履歴");
     expect(html).toContain("/detail-project");
@@ -98,13 +98,8 @@ describe("publicar worker", () => {
     expect(html).toContain("delete-project");
     expect(html).toContain("実行者");
     expect(html).toContain(user.email);
-    expect(html).toContain('class="user-identity-name">Test User</span>');
-    expect(html).toContain('class="user-identity-email">user@example.com</span>');
-    expect(html).not.toContain("Test User &lt;user@example.com&gt;");
-    expect(html).toContain('src="https://example.com/avatar.png"');
-    expect(html).toContain('referrerpolicy="no-referrer"');
-    expect(html).toContain('role: "editor"');
-    expect(html).not.toContain('<option value="viewer"');
+    // 権限は共有ドライブと同じ規則で決まるため、メンバーの追加・role変更の欄は出さない
+    expect(html).not.toContain("member-form");
     expect(html).toContain("function activateTab");
     expect(html).toContain("userIdentityNode(log.userName, log.userEmail, log.userAvatarUrl)");
     expect(html).toContain("/comment-threads?limit=50&status=");
@@ -353,7 +348,14 @@ describe("publicar worker", () => {
       }),
       localEnv
     );
-    expect(otherResponse.status).toBe(404);
+    expect(otherResponse.status).toBe(200);
+    const guestResponse = await app.fetch(
+      new Request(`http://localhost/api/v1/projects/${project.id}/files`, {
+        headers: { Cookie: await authCookie(localEnv, guestUser) }
+      }),
+      localEnv
+    );
+    expect(guestResponse.status).toBe(403);
   });
 
   it("deletes a project file from Drive, R2, and D1", async () => {

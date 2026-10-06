@@ -16,7 +16,7 @@ The service stores source files in Google Drive, caches delivered files in Cloud
 - **API key authentication** using `pub_...` keys for CLI and AI-agent workflows.
 - **AI agent discovery** through `/llms.txt` and `/api/v1/openapi.json`.
 - **Review and comment workflow** for authenticated users viewing published HTML.
-- **Project management UI** for projects, files, members, deploy history, access logs, and API keys.
+- **Project management UI** for projects, files, external invitations, deploy history, access logs, and API keys.
 - **Self-hosted Cloudflare stack** using Workers, D1, KV, and R2.
 
 ## Quick start

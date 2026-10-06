@@ -11,6 +11,7 @@ import {
   getProjectById,
   getProjectForUser,
   getProjectRole,
+  getProjectMemberRole,
   isDriveAccessRole,
   isProjectVisibility,
   isValidAlias,
@@ -351,7 +352,7 @@ projectsRoute.patch("/:id/members/:userId", async (c) => {
   if (!body || !isProjectRole(body.role)) {
     return c.json({ error: "invalid_member" }, 400);
   }
-  const currentRole = await getProjectRole(c.env, id, userId);
+  const currentRole = await getProjectMemberRole(c.env, id, userId);
   if (currentRole === "owner" && body.role !== "owner" && (await countProjectOwners(c.env, id)) <= 1) {
     return c.json({ error: "last_owner_required" }, 409);
   }
@@ -369,7 +370,7 @@ projectsRoute.delete("/:id/members/:userId", async (c) => {
   if (ownerError) {
     return ownerError;
   }
-  const currentRole = await getProjectRole(c.env, id, userId);
+  const currentRole = await getProjectMemberRole(c.env, id, userId);
   if (currentRole === "owner" && (await countProjectOwners(c.env, id)) <= 1) {
     return c.json({ error: "last_owner_required" }, 409);
   }
