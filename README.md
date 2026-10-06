@@ -76,10 +76,11 @@ The production setup flow is:
 | `GET` | `/api/v1/api-keys` | List API keys |
 | `POST` | `/api/v1/api-keys` | Create an API key |
 | `DELETE` | `/api/v1/api-keys/{id}` | Delete an API key |
+| `GET` | `/api/v1/drive-members/status` | Shared drive member sync status |
 | `GET` | `/auth/cli` | Start the CLI authentication flow |
 | `GET` | `/auth/cli/poll` | Poll the CLI authentication flow |
 
-Use `Authorization: Bearer pub_...` for API-key authenticated requests.
+Use `Authorization: Bearer pub_...` for API-key authenticated requests. See `/api/v1/openapi.json` for the full list of endpoints.
 
 ## AI agent integration
 
@@ -88,7 +89,7 @@ AI agents can discover the service through:
 - `GET /llms.txt`
 - `GET /api/v1/openapi.json`
 
-Create an API key from the UI or the API, then deploy an HTML file with curl:
+Create an API key with CLI authentication (`/auth/cli`), then deploy an HTML file with curl:
 
 ```bash
 curl -X POST "https://your-domain/api/v1/projects/<project-id>/deploy?path=index.html" \

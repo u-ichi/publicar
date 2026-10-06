@@ -14,16 +14,19 @@
       reopenBtn: "再オープン",
       deleteBtn: "削除",
       commentCount: function (u, t) { return u + " 件未解決 / " + t + " 件"; },
-      focusLabel: "最大化",
-      normalLabel: "標準表示",
       filterAll: "すべて",
       filterHideResolved: "未解決のみ",
       filterOnlyOpen: "未対応のみ",
       filterLabel: "レビューフィルタ",
-      focusTitle: "最大化モード",
       themeTitle: "テーマ切替",
       tocLabel: "目次",
       tocHeader: "目次",
+      tocToggleLabel: "目次",
+      tocToggleTitle: "目次の表示切替",
+      commentsToggleLabel: "コメント",
+      commentsToggleTitle: "コメントの表示切替",
+      jsonToggleLabel: "JSON",
+      jsonToggleTitle: "comments.json の Export / Import",
       publishLabel: "公開プレビュー",
       publishActive: "プレビュー中",
       publishTitle: "公開プレビュー",
@@ -35,6 +38,7 @@
       publishToast: "公開用HTMLを書き出しました",
       agentReplied: "エージェントが返信しました",
       docUpdated: "ドキュメントが更新されました。リロードして最新版を確認できます",
+      saveError: "コメント保存エラー: ",
       reloadBtn: "リロード",
       closeBtn: "閉じる",
     },
@@ -50,16 +54,19 @@
       reopenBtn: "Reopen",
       deleteBtn: "Delete",
       commentCount: function (u, t) { return u + " unresolved / " + t + " total"; },
-      focusLabel: "Maximize",
-      normalLabel: "Normal",
       filterAll: "All",
       filterHideResolved: "Unresolved only",
       filterOnlyOpen: "Open only",
       filterLabel: "Review filter",
-      focusTitle: "Maximize mode",
       themeTitle: "Toggle theme",
       tocLabel: "Table of contents",
       tocHeader: "Contents",
+      tocToggleLabel: "Contents",
+      tocToggleTitle: "Toggle table of contents",
+      commentsToggleLabel: "Comments",
+      commentsToggleTitle: "Toggle comments",
+      jsonToggleLabel: "JSON",
+      jsonToggleTitle: "Export / import comments.json",
       publishLabel: "Publish preview",
       publishActive: "Previewing",
       publishTitle: "Publish preview",
@@ -71,6 +78,7 @@
       publishToast: "Published HTML exported",
       agentReplied: "Agent replied",
       docUpdated: "Document has been updated. Reload to see the latest version.",
+      saveError: "Comment save error: ",
       reloadBtn: "Reload",
       closeBtn: "Close",
     },
@@ -79,9 +87,16 @@
   const lang = document.documentElement.lang === "ja" ? "ja" : "en";
   const t = I18N[lang];
 
+  // 目次から飛んだとき、見出しを可視領域の上端から何 px 下に止めるか。
+  // 基準は block の上端ではなく見出しそのものにする。block の上余白は種類ごとに違い
+  // (実測 14px / 38px)、上端合わせだと見出しの止まる位置が節ごとにばらつくため。
+  const TOC_JUMP_OFFSET = 28;
+
   const COMMENTS_URL = "annotations/comments.json";
   const STORAGE_PREFIX = "reviewable-html-comments:";
   const THEME_STORAGE_KEY = "reviewable-theme";
+  // 目次列とコメント列のドラッグ変更幅の保存先
+  const COL_WIDTH_STORAGE_KEY = "reviewable-col-widths";
   const COMMENT_STATUS = Object.freeze({
     needsAgentReview: "needs_agent_review",
     needsUserReply: "needs_user_reply",
@@ -106,6 +121,11 @@
     positionFrame: 0,
   };
 
+  // コメントのハイライトと番号は本文の中へ後から差し込まれる。番号は inline なので文字幅が
+  // 増え、差し込みの前後で行の折り返しが変わって文章が一瞬ずれて見える (実測で本文が 165px
+  // 伸びた)。差し込みが終わるまで本文を隠し、確定した状態だけを見せる。
+  // JS が動かない環境では最初から付かないので、本文が消えたままにはならない。
+  hideProseUntilSettled();
   initI18nLabels();
 
   const ui = createUi();
@@ -113,9 +133,12 @@
 
   initThemeToggle();
   initFilter();
-  initFocusToggle();
+  initPanelToggles();
+  initUtilityToggle();
+  initColumnResizers();
   initPublishToggle();
   initTocScrollSpy();
+  initCommentRailScroll();
 
   document.addEventListener("selectionchange", scheduleSelectionCapture);
   document.addEventListener("keyup", scheduleSelectionCapture);
@@ -159,7 +182,9 @@
       '    <button type="button" data-save-comment>Comment</button>',
       "  </div>",
       "</section>",
-      '<div class="review-comments-utility">',
+      // 常時表示しない。fixed の bar は rail 下部の返信欄・送信ボタンと重なるため、
+      // topbar の JSON ボタンで開いたときだけ出す
+      '<div class="review-comments-utility" hidden>',
       '  <span class="review-comments-status" data-comments-status>standalone</span>',
       '  <button type="button" data-export-comments>Export</button>',
       '  <label class="review-comments-import">Import<input type="file" accept="application/json" data-import-comments></label>',
@@ -176,6 +201,7 @@
       saveButton: root.querySelector("[data-save-comment]"),
       exportButton: root.querySelector("[data-export-comments]"),
       importInput: root.querySelector("[data-import-comments]"),
+      utilityBar: root.querySelector(".review-comments-utility"),
       status: root.querySelector("[data-comments-status]"),
       commentRail,
       commentLayer: commentRail.querySelector("#cmtLayer"),
@@ -202,6 +228,21 @@
     return rail;
   }
 
+  function hideProseUntilSettled() {
+    const prose = document.querySelector(".prose");
+    if (!prose) {
+      return;
+    }
+    prose.classList.add("is-settling");
+    // コメントの読み込みが失敗して revealProse に届かない場合の保険。
+    // 本文が隠れたままになるのが最悪なので、時間が来たら必ず出す
+    window.setTimeout(revealProse, 1200);
+  }
+
+  function revealProse() {
+    document.querySelector(".prose")?.classList.remove("is-settling");
+  }
+
   async function loadComments() {
     const local = readLocalComments();
     try {
@@ -217,6 +258,7 @@
     }
     writeLocalComments();
     renderComments();
+    revealProse();
   }
 
   async function saveComments() {
@@ -227,8 +269,19 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(state.comments, null, 2),
       });
-      state.serverWritable = response.ok;
-      setStatus(response.ok ? "comments.json" : "standalone");
+      if (response.ok) {
+        state.serverWritable = true;
+        setStatus("comments.json");
+      } else {
+        var errorMessage = "";
+        try {
+          var body = await response.json();
+          errorMessage = body.error || "";
+        } catch (_parseErr) { /* ignore */ }
+        state.serverWritable = false;
+        setStatus("standalone");
+        showSaveError(errorMessage);
+      }
       return response.ok;
     } catch (_error) {
       state.serverWritable = false;
@@ -384,30 +437,58 @@
   }
 
   function clearBlockCommentBadges() {
+    for (const container of document.querySelectorAll("[data-comment-badges]")) {
+      container.remove();
+    }
     for (const badge of document.querySelectorAll("[data-comment-badge]")) {
       badge.remove();
     }
   }
 
+  function ensureBlockBadgeContainer(block) {
+    let container = block.querySelector(":scope > [data-comment-badges]");
+    if (!container) {
+      container = document.createElement("div");
+      container.className = "review-comment-badges";
+      container.dataset.commentBadges = "";
+      block.appendChild(container);
+    }
+    return container;
+  }
+
   function addBlockCommentBadge(block, thread, number) {
+    const container = ensureBlockBadgeContainer(block);
     const badge = document.createElement("button");
     badge.type = "button";
     badge.className = "cx review-comment-badge";
     badge.dataset.comment = thread.id || "";
     badge.dataset.commentBadge = thread.id || "";
     badge.dataset.state = threadCardState(thread);
-    badge.textContent = `Comment ${number}`;
+    // 吹き出しアイコン + 番号。「Comment N」と綴ると 5 個並んだだけで幅を大きく取るため、
+    // 何のバッジかはアイコンで示し、文字は番号だけにする
+    badge.innerHTML =
+      '<svg class="rcb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M3 3.5h10v7H8l-3 2.5V10.5H3z"/></svg>';
+    badge.appendChild(document.createTextNode(String(number)));
+    badge.setAttribute("aria-label", `Comment ${number}`);
+    badge.title = `Comment ${number}`;
     badge.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       activate(thread.id, true);
     });
-    block.appendChild(badge);
+    container.appendChild(badge);
   }
 
   function highlightThreadSelection(block, thread, number) {
-    if (thread.anchor && Number.isInteger(thread.anchor.start) && Number.isInteger(thread.anchor.end)) {
-      return highlightByOffsets(block, thread, thread.anchor.start, thread.anchor.end, number);
+    // Re-resolve offsets against the block's CURRENT text so a highlight stays
+    // on the words it was attached to even after the body was edited (or after
+    // an earlier comment in the same block shifted the text). Falls back to a
+    // plain text search, then to a badge, when the text can't be located.
+    const resolved = resolveHighlightOffsets(block, thread);
+    if (resolved && highlightByOffsets(block, thread, resolved.start, resolved.end, number)) {
+      return true;
     }
     const selectedText = typeof thread.selected_text === "string" ? thread.selected_text.trim() : "";
     if (!selectedText) {
@@ -482,6 +563,89 @@
     return true;
   }
 
+  // The concatenated text of the block as seen by highlightByOffsets/anchor
+  // math (text already inside a comment highlight is excluded, matching the
+  // basis used when the anchor was first captured).
+  function blockAnchorText(block) {
+    return textNodesIn(block).map((node) => node.nodeValue || "").join("");
+  }
+
+  // Decide which character offsets to highlight for a thread. Prefer the stored
+  // absolute offsets when they still point at the selected text; otherwise
+  // re-locate the selected text by its surrounding context so edits to the body
+  // don't leave the highlight stranded on the wrong words.
+  function resolveHighlightOffsets(block, thread) {
+    const selected = typeof thread.selected_text === "string" ? thread.selected_text : "";
+    const anchor = thread.anchor;
+    const hasAnchor = anchor && Number.isInteger(anchor.start) && Number.isInteger(anchor.end) && anchor.end > anchor.start;
+    if (!selected) {
+      return hasAnchor ? { start: anchor.start, end: anchor.end } : null;
+    }
+    const fullText = blockAnchorText(block);
+    if (hasAnchor) {
+      const slice = fullText.slice(anchor.start, anchor.end);
+      if (slice === selected || slice.trim() === selected) {
+        return { start: anchor.start, end: anchor.end };
+      }
+    }
+    return findBestOccurrence(fullText, selected, thread.prefix, thread.suffix);
+  }
+
+  // Locate `selected` inside `fullText`. When it occurs more than once, pick the
+  // occurrence whose neighbouring text best matches the stored prefix/suffix.
+  function findBestOccurrence(fullText, selected, prefix, suffix) {
+    if (!selected) {
+      return null;
+    }
+    const occurrences = [];
+    let from = fullText.indexOf(selected);
+    while (from !== -1) {
+      occurrences.push(from);
+      from = fullText.indexOf(selected, from + 1);
+    }
+    if (occurrences.length === 0) {
+      return null;
+    }
+    if (occurrences.length === 1) {
+      return { start: occurrences[0], end: occurrences[0] + selected.length };
+    }
+    const pref = typeof prefix === "string" ? prefix : "";
+    const suff = typeof suffix === "string" ? suffix : "";
+    let best = occurrences[0];
+    let bestScore = -1;
+    for (const start of occurrences) {
+      const before = fullText.slice(0, start);
+      const after = fullText.slice(start + selected.length);
+      const score = commonSuffixLen(before, pref) + commonPrefixLen(after, suff);
+      if (score > bestScore) {
+        bestScore = score;
+        best = start;
+      }
+    }
+    return { start: best, end: best + selected.length };
+  }
+
+  function commonPrefixLen(a, b) {
+    const max = Math.min(a.length, b.length);
+    let count = 0;
+    while (count < max && a[count] === b[count]) {
+      count += 1;
+    }
+    return count;
+  }
+
+  function commonSuffixLen(a, b) {
+    let i = a.length;
+    let j = b.length;
+    let count = 0;
+    while (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      i -= 1;
+      j -= 1;
+      count += 1;
+    }
+    return count;
+  }
+
   function createHighlightElement(thread) {
     const highlight = document.createElement("span");
     highlight.className = "cx";
@@ -511,21 +675,25 @@
     }
     ui.commentLayer.innerHTML = "";
     state.comments.comments.forEach((thread, index) => {
-      const card = document.createElement("aside");
-      const cardState = threadCardState(thread);
-      card.className = "cmt";
-      card.dataset.cstate = cardState;
-      card.dataset.for = thread.id || "";
-      card.id = cardId(thread.id);
-      card.tabIndex = 0;
-      card.innerHTML = cardInner(thread, index + 1);
-      bindCommentCard(card, thread);
-      ui.commentLayer.appendChild(card);
+      ui.commentLayer.appendChild(createCommentCard(thread, index + 1));
     });
     updateCommentCount();
     if (state.activeCommentId) {
       setActiveClasses(state.activeCommentId);
     }
+  }
+
+  function createCommentCard(thread, number) {
+    const card = document.createElement("aside");
+    const cardState = threadCardState(thread);
+    card.className = "cmt";
+    card.dataset.cstate = cardState;
+    card.dataset.for = thread.id || "";
+    card.id = cardId(thread.id);
+    card.tabIndex = 0;
+    card.innerHTML = cardInner(thread, number);
+    bindCommentCard(card, thread);
+    return card;
   }
 
   function cardInner(thread, number) {
@@ -551,7 +719,7 @@
       `  <span class="cmt-state">${escapeHtml(t.cardState[cardState])}</span>`,
       "</div>",
       `<blockquote class="cmt-quote">${escapeHtml(thread.selected_text || thread.block_id || `Comment ${number}`)}</blockquote>`,
-      `<div class="cmt-body review-comment-main-body" data-thread-comment-display tabindex="0">${escapeHtml(thread.comment || "")}</div>`,
+      `<div class="cmt-body review-comment-main-body" data-thread-comment-display tabindex="0">${renderCommentMarkdown(thread.comment || "")}</div>`,
       `<textarea data-thread-comment-editor rows="3" hidden>${escapeHtml(thread.comment || "")}</textarea>`,
       replies,
       resolvedBanner,
@@ -569,6 +737,7 @@
         return;
       }
       activate(thread.id, false);
+      scrollBodyToComment(thread);
     });
     card.addEventListener("focus", () => activate(thread.id, false));
     card.querySelector("[data-thread-comment-display]")?.addEventListener("click", (event) => {
@@ -598,16 +767,10 @@
       }
     });
     card.querySelector("[data-thread-resolve]")?.addEventListener("click", async () => {
-      thread.status = COMMENT_STATUS.resolved;
-      await saveComments();
-      renderComments();
-      activate(thread.id, false);
+      await updateThreadStatus(thread, COMMENT_STATUS.resolved);
     });
     card.querySelector("[data-thread-reopen]")?.addEventListener("click", async () => {
-      thread.status = COMMENT_STATUS.needsAgentReview;
-      await saveComments();
-      renderComments();
-      activate(thread.id, false);
+      await updateThreadStatus(thread, COMMENT_STATUS.needsAgentReview);
     });
     card.querySelector("[data-thread-delete]")?.addEventListener("click", async () => {
       state.comments.comments = state.comments.comments.filter((item) => item.id !== thread.id);
@@ -617,6 +780,51 @@
       await saveComments();
       renderComments();
     });
+  }
+
+  async function updateThreadStatus(thread, status) {
+    if (!thread || thread.status === status) {
+      return;
+    }
+    thread.status = status;
+    await saveComments();
+    refreshThreadDisplay(thread);
+    activate(thread.id, false);
+  }
+
+  function refreshThreadDisplay(thread) {
+    replaceCommentCard(thread);
+    updateThreadAnchors(thread);
+    updateBlockCommentState(thread.block_id);
+    updateCommentCount();
+    applyFilterVisibility();
+    setStatus(state.serverWritable ? "comments.json" : "standalone");
+    schedulePositionCards();
+  }
+
+  function replaceCommentCard(thread) {
+    const index = state.comments.comments.findIndex((item) => item.id === thread.id);
+    const current = document.getElementById(cardId(thread.id));
+    if (!current || index < 0) {
+      return;
+    }
+    current.replaceWith(createCommentCard(thread, index + 1));
+  }
+
+  function updateThreadAnchors(thread) {
+    document.querySelectorAll(commentSelector(thread.id)).forEach((element) => {
+      element.dataset.state = threadCardState(thread);
+    });
+  }
+
+  function updateBlockCommentState(blockId) {
+    const block = document.querySelector(`[data-review-block="${cssEscape(blockId)}"]`);
+    if (!block) {
+      return;
+    }
+    const blockThreads = state.comments.comments.filter((thread) => thread.block_id === blockId);
+    block.classList.toggle("has-review-comments", blockThreads.some((thread) => !isResolvedThread(thread)));
+    block.classList.toggle("has-review-replies", blockThreads.some(isNeedsUserReply));
   }
 
   function renderReplies(thread) {
@@ -630,7 +838,7 @@
         `  <div class="av">${escapeHtml(replyInitials(reply))}</div>`,
         "  <div>",
         `    <div class="reply-name">${escapeHtml(replyAuthor(reply))}<span class="reply-time">${escapeHtml(formatDateTime(reply.created_at))}</span></div>`,
-        `    <div class="reply-body">${escapeHtml(reply.body)}</div>`,
+        `    <div class="reply-body">${renderCommentMarkdown(reply.body)}</div>`,
         "  </div>",
         "</div>",
       ].join("");
@@ -696,38 +904,66 @@
     }, 0);
   }
 
+  // Cards flow normally inside the independently scrolling rail; here we only
+  // order them to follow their anchors' reading order in the document. The
+  // document is never scrolled — the rail scrolls on its own (see
+  // scrollActiveCardIntoView). Re-ordering happens only when the order actually
+  // changed, so an in-progress rail scroll is never interrupted.
   function positionCards() {
     const layer = document.getElementById("cmtLayer");
     if (!layer) {
       return;
     }
     const cards = Array.from(layer.querySelectorAll(".cmt"));
-    if (!isDesktopRail()) {
-      for (const card of cards) {
-        card.style.position = "";
-        card.style.top = "";
-      }
+    for (const card of cards) {
+      card.style.position = "";
+      card.style.top = "";
+    }
+    if (!isDesktopRail() || cards.length === 0) {
       return;
     }
-    const layerRect = layer.getBoundingClientRect();
-    cards.sort((a, b) => {
-      const aAnchor = document.querySelector(commentSelector(a.dataset.for));
-      const bAnchor = document.querySelector(commentSelector(b.dataset.for));
-      const aTop = aAnchor ? aAnchor.getBoundingClientRect().top : 0;
-      const bTop = bAnchor ? bAnchor.getBoundingClientRect().top : 0;
-      return aTop - bTop;
-    });
-    let cursor = 0;
-    for (const card of cards) {
-      if (card.hidden || card.style.display === "none") {
-        continue;
+    const sorted = cards
+      .map((card) => {
+        const anchor = document.querySelector(commentSelector(card.dataset.for));
+        const top = anchor ? anchor.getBoundingClientRect().top : Number.MAX_SAFE_INTEGER;
+        return { card, top };
+      })
+      .sort((a, b) => a.top - b.top)
+      .map((entry) => entry.card);
+    const sameOrder = sorted.every((card, index) => cards[index] === card);
+    if (!sameOrder) {
+      for (const card of sorted) {
+        layer.appendChild(card);
       }
-      const anchor = document.querySelector(commentSelector(card.dataset.for));
-      const ideal = anchor ? anchor.getBoundingClientRect().top - layerRect.top + layer.scrollTop : cursor;
-      const top = Math.max(ideal, cursor);
-      card.style.position = "absolute";
-      card.style.top = `${top}px`;
-      cursor = top + card.offsetHeight + 14;
+    }
+  }
+
+  // Scroll ONLY the comment rail so the active card is visible. The document
+  // itself never moves; the rail is an independent scroll container.
+  function scrollActiveCardIntoView(commentId) {
+    const layer = document.getElementById("cmtLayer");
+    const card = document.getElementById(cardId(commentId));
+    if (!layer || !card || !isDesktopRail()) {
+      return;
+    }
+    const margin = 12;
+    const cardTop = card.offsetTop;
+    const cardBottom = cardTop + card.offsetHeight;
+    const viewTop = layer.scrollTop;
+    const viewBottom = viewTop + layer.clientHeight;
+    let target = viewTop;
+    if (cardTop < viewTop + margin) {
+      target = cardTop - margin;
+    } else if (cardBottom > viewBottom - margin) {
+      target = cardBottom - layer.clientHeight + margin;
+    } else {
+      return;
+    }
+    target = Math.max(0, target);
+    if (typeof layer.scrollTo === "function") {
+      layer.scrollTo({ top: target, behavior: "smooth" });
+    } else {
+      layer.scrollTop = target;
     }
   }
 
@@ -746,6 +982,51 @@
     return window.matchMedia("(min-width: 901px)").matches && (!viewDoc || viewDoc.classList.contains("active"));
   }
 
+  // Keep wheel scrolling inside the comment rail from leaking to the document,
+  // so the comment column and the body column scroll independently.
+  function initCommentRailScroll() {
+    const layer = document.getElementById("cmtLayer");
+    if (!layer) {
+      return;
+    }
+    layer.addEventListener("wheel", (event) => {
+      const maxScroll = layer.scrollHeight - layer.clientHeight;
+      if (maxScroll <= 0) {
+        return;
+      }
+      const atTop = layer.scrollTop <= 0 && event.deltaY < 0;
+      const atBottom = layer.scrollTop >= maxScroll && event.deltaY > 0;
+      if (!atTop && !atBottom) {
+        event.preventDefault();
+        layer.scrollTop += event.deltaY;
+      }
+    }, { passive: false });
+  }
+
+  // scrollCard=true: activation came from the document side (highlight, badge,
+  // new comment) — reveal the matching card by scrolling the RAIL to it, never
+  // the document. false: the user is already working inside the card.
+  // カードのクリックで、そのコメントが付いた本文位置へ飛ぶ。
+  // ハイライトが無いコメント (位置を特定できなかったもの) は所属 block へ飛ぶ
+  function scrollBodyToComment(thread) {
+    const target =
+      document.querySelector(commentSelector(thread.id)) ||
+      (thread.block_id ? document.getElementById(thread.block_id) : null);
+    if (!target) {
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    const viewHeight = window.innerHeight;
+    // 既に視界の読みやすい帯 (上 15%〜70%) にあるなら動かさない
+    if (rect.top >= viewHeight * 0.15 && rect.bottom <= viewHeight * 0.7) {
+      return;
+    }
+    const sc = document.getElementById("canvas") || document.documentElement;
+    const top =
+      rect.top - sc.getBoundingClientRect().top + sc.scrollTop - viewHeight * 0.25;
+    sc.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  }
+
   function activate(commentId, scrollCard = true) {
     if (!commentId) {
       return;
@@ -754,12 +1035,7 @@
     setActiveClasses(commentId);
     schedulePositionCards();
     if (scrollCard) {
-      window.requestAnimationFrame(() => {
-        const card = document.getElementById(cardId(commentId));
-        if (card) {
-          card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        }
-      });
+      window.requestAnimationFrame(() => scrollActiveCardIntoView(commentId));
     }
   }
 
@@ -767,6 +1043,9 @@
     document.querySelectorAll(".cx.is-active, .cmt.is-active").forEach((element) => {
       element.classList.remove("is-active");
     });
+    if (!commentId) {
+      return;
+    }
     document.querySelectorAll(commentSelector(commentId)).forEach((highlight) => {
       highlight.classList.add("is-active");
     });
@@ -790,7 +1069,9 @@
     state.comments.comments.forEach((thread) => {
       const visible = shouldShowThreadByFilter(thread);
       document.querySelectorAll(commentSelector(thread.id)).forEach((highlight) => {
-        highlight.hidden = !visible;
+        highlight.querySelectorAll(".cx-num").forEach((badge) => {
+          badge.hidden = !visible;
+        });
       });
       const card = document.getElementById(cardId(thread.id));
       if (card) {
@@ -831,14 +1112,106 @@
     });
   }
 
-  function initThemeToggle() {
-    const button = document.getElementById("themeToggle");
-    const saved = safeLocalStorageGet(THEME_STORAGE_KEY);
-    if (saved === "light" || saved === "dark") {
-      document.documentElement.dataset.theme = saved;
-    } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      document.documentElement.dataset.theme = "dark";
+  // theme 切替に Mermaid を追従させる。描き直しの実体は mermaid init script 側にあり
+  // (公開版にも同じ処理が要るため)、ここは切替後の呼び出しとカード再配置だけを持つ。
+  function rerenderMermaid() {
+    if (typeof window.__rhwRerenderMermaid !== "function") { return; }
+    Promise.resolve(window.__rhwRerenderMermaid()).then(schedulePositionCards, () => {});
+  }
+
+  // 目次列とコメント列の幅をドラッグで変える。列幅は CSS 変数 (--toc-w / --rail-w) に
+  // 一本化されており、ここは変数の書き換え・clamp・保存だけを行う (grid 構造は変えない)
+  function initColumnResizers() {
+    const grid = document.querySelector("#canvas .doc-grid");
+    if (!grid) {
+      return;
     }
+    const defs = [
+      { key: "toc", varName: "--toc-w", host: ".toc", grow: 1, min: 160, max: 400 },
+      { key: "rail", varName: "--rail-w", host: ".cmt-rail", grow: -1, min: 240, max: 560 },
+    ];
+    let saved = {};
+    try {
+      saved = JSON.parse(safeLocalStorageGet(COL_WIDTH_STORAGE_KEY) || "{}") || {};
+    } catch (e) {
+      saved = {};
+    }
+    defs.forEach((def) => {
+      const host = grid.querySelector(def.host);
+      if (!host) {
+        return;
+      }
+      const clampWidth = (w) => Math.min(def.max, Math.max(def.min, Math.round(w)));
+      if (Number.isFinite(saved[def.key])) {
+        grid.style.setProperty(def.varName, clampWidth(saved[def.key]) + "px");
+      }
+      const handle = document.createElement("div");
+      handle.className = "col-resizer col-resizer-" + def.key;
+      grid.appendChild(handle);
+
+      let startX = 0;
+      let startWidth = 0;
+      const onMove = (event) => {
+        // grow=1 は右へ引くと広がる列 (目次)、-1 は左へ引くと広がる列 (コメント)
+        const width = clampWidth(startWidth + def.grow * (event.clientX - startX));
+        grid.style.setProperty(def.varName, width + "px");
+        schedulePositionCards();
+      };
+      const onUp = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.body.classList.remove("is-col-resizing");
+        saved[def.key] = clampWidth(host.getBoundingClientRect().width);
+        safeLocalStorageSet(COL_WIDTH_STORAGE_KEY, JSON.stringify(saved));
+      };
+      handle.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        startX = event.clientX;
+        startWidth = host.getBoundingClientRect().width;
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+        document.body.classList.add("is-col-resizing");
+      });
+      handle.addEventListener("dblclick", () => {
+        grid.style.removeProperty(def.varName);
+        delete saved[def.key];
+        safeLocalStorageSet(COL_WIDTH_STORAGE_KEY, JSON.stringify(saved));
+        schedulePositionCards();
+      });
+    });
+  }
+
+  // comments.json の Export/Import bar は常時出さず、topbar の JSON ボタンで開閉する。
+  // 出しっぱなしだと fixed の bar が rail 下部の返信欄・送信ボタンを覆って操作できない
+  function initUtilityToggle() {
+    const toolset = document.querySelector(".topbar .toolset");
+    if (!toolset || !ui.utilityBar) {
+      return;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn ghost";
+    button.id = "jsonToggle";
+    button.title = t.jsonToggleTitle;
+    button.setAttribute("aria-pressed", "false");
+    button.innerHTML =
+      '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"' +
+      ' stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8m0 0 3-3m-3 3L5 7M3 12v2h10v-2"/></svg>';
+    const label = document.createElement("span");
+    label.textContent = t.jsonToggleLabel;
+    button.appendChild(label);
+    button.addEventListener("click", () => {
+      const open = ui.utilityBar.hidden;
+      ui.utilityBar.hidden = !open;
+      button.setAttribute("aria-pressed", open ? "true" : "false");
+    });
+    toolset.appendChild(button);
+  }
+
+  function initThemeToggle() {
+    // 保存済み theme の反映は head の early-theme script が済ませている
+    // (Mermaid の初期化より前に確定させる必要があるため)。
+    const button = document.getElementById("themeToggle");
     if (!button) {
       return;
     }
@@ -855,6 +1228,7 @@
       if (label) {
         label.textContent = next === "dark" ? "Light" : "Dark";
       }
+      rerenderMermaid();
       schedulePositionCards();
     });
   }
@@ -877,34 +1251,154 @@
     });
   }
 
-  function applyFocusState(canvas, button, isFocus) {
-    canvas.classList.toggle("is-focus", isFocus);
-    button.setAttribute("aria-pressed", isFocus ? "true" : "false");
-    const label = button.querySelector(".ft-label");
-    if (label) {
-      label.textContent = isFocus ? t.normalLabel : t.focusLabel;
-    } else {
-      button.textContent = isFocus ? t.normalLabel : t.focusLabel;
+  /**
+   * レイアウト変更の前後で、読んでいた箇所を画面上の同じ高さに留める。
+   * mutate 内で class や DOM を変え、直後に scrollTop を補正する。
+   */
+  function keepReadingPosition(mutate) {
+    const canvas = document.getElementById("canvas");
+    if (!canvas || typeof mutate !== "function") {
+      if (typeof mutate === "function") {
+        mutate();
+      }
+      return;
+    }
+    const paper = canvas.querySelector(".paper");
+    const prose = canvas.querySelector(".prose");
+    const canvasTopBefore = canvas.getBoundingClientRect().top;
+    const anchor = pickReadingAnchor(paper, prose, canvasTopBefore);
+    let beforeOffset = null;
+    let beforeRatio = null;
+    let straddling = false;
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      straddling = rect.top < canvasTopBefore && rect.bottom > canvasTopBefore;
+      if (straddling && rect.height > 0) {
+        beforeRatio = (canvasTopBefore - rect.top) / rect.height;
+      } else {
+        beforeOffset = rect.top - canvasTopBefore;
+      }
+    }
+
+    mutate();
+
+    if (!anchor || !document.contains(anchor)) {
+      return;
+    }
+    const canvasTopAfter = canvas.getBoundingClientRect().top;
+    const rectAfter = anchor.getBoundingClientRect();
+    let delta = 0;
+    if (straddling && beforeRatio != null && rectAfter.height > 0) {
+      const desiredTop = canvasTopAfter - beforeRatio * rectAfter.height;
+      delta = rectAfter.top - desiredTop;
+    } else if (beforeOffset != null) {
+      const afterOffset = rectAfter.top - canvasTopAfter;
+      delta = afterOffset - beforeOffset;
+    }
+    if (Math.abs(delta) > 0.5) {
+      canvas.scrollTop += delta;
     }
   }
 
-  function initFocusToggle() {
-    const button = document.getElementById("focusToggle");
+  function pickReadingAnchor(paper, prose, canvasTop) {
+    const candidates = [];
+    const collect = (parent) => {
+      if (!parent) {
+        return;
+      }
+      Array.from(parent.children).forEach((el) => {
+        if (el.nodeType !== 1) {
+          return;
+        }
+        candidates.push(el);
+      });
+    };
+    collect(paper);
+    collect(prose);
+    // document 順 (木の先順) に近い並び: paper 直下の後に prose 直下だが、
+    // prose は paper 内にあることが多いので、位置でソートする
+    candidates.sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.top - br.top || ar.left - br.left;
+    });
+    // 可視領域上端より下に上端がある最初の要素
+    for (let i = 0; i < candidates.length; i++) {
+      const el = candidates[i];
+      const rect = el.getBoundingClientRect();
+      if (rect.height <= 0) {
+        continue;
+      }
+      if (rect.top >= canvasTop) {
+        return el;
+      }
+    }
+    // 上端をまたぐ最も内側 (面積が小さく top が近い) 要素
+    let best = null;
+    let bestArea = Infinity;
+    candidates.forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.height <= 0) {
+        return;
+      }
+      if (rect.top < canvasTop && rect.bottom > canvasTop) {
+        const area = rect.width * rect.height;
+        if (area < bestArea) {
+          bestArea = area;
+          best = el;
+        }
+      }
+    });
+    return best;
+  }
+
+  function applyHideClass(canvas, className, hide) {
+    canvas.classList.toggle(className, hide);
+  }
+
+  function initPanelToggles() {
     const canvas = document.getElementById("canvas");
-    if (!button || !canvas) {
+    const tocButton = document.getElementById("tocToggle");
+    const commentsButton = document.getElementById("commentsToggle");
+    if (!canvas) {
       return;
     }
-    const stored = localStorage.getItem("rw:focus");
-    if (stored === "true") {
-      applyFocusState(canvas, button, true);
+
+    const applyStored = (button, className, storageKey) => {
+      if (!button) {
+        return;
+      }
+      const stored = localStorage.getItem(storageKey);
+      // "true" = 非表示。未設定は表示 (aria-pressed=true)
+      const hide = stored === "true";
+      applyHideClass(canvas, className, hide);
+      button.setAttribute("aria-pressed", hide ? "false" : "true");
+    };
+
+    // 初期化はスクロール前のため keepReadingPosition を通さない
+    applyStored(tocButton, "hide-toc", "rw:hide-toc");
+    applyStored(commentsButton, "hide-comments", "rw:hide-comments");
+    if (tocButton || commentsButton) {
       schedulePositionCards();
     }
-    button.addEventListener("click", () => {
-      const isFocus = !canvas.classList.contains("is-focus");
-      applyFocusState(canvas, button, isFocus);
-      localStorage.setItem("rw:focus", isFocus ? "true" : "false");
-      schedulePositionCards();
-    });
+
+    const bindToggle = (button, className, storageKey) => {
+      if (!button) {
+        return;
+      }
+      button.addEventListener("click", () => {
+        keepReadingPosition(() => {
+          const willHide = !canvas.classList.contains(className);
+          applyHideClass(canvas, className, willHide);
+          button.setAttribute("aria-pressed", willHide ? "false" : "true");
+          localStorage.setItem(storageKey, willHide ? "true" : "false");
+          schedulePositionCards();
+        });
+      });
+    };
+
+    bindToggle(tocButton, "hide-toc", "rw:hide-toc");
+    bindToggle(commentsButton, "hide-comments", "rw:hide-comments");
   }
 
   function initPublishToggle() {
@@ -934,251 +1428,52 @@
         if (!canvas) {
           return;
         }
-        const isMax = widthButton.getAttribute("data-pw") === "max";
-        canvas.classList.toggle("is-focus", isMax);
-        const focusButton = document.getElementById("focusToggle");
-        if (focusButton) {
-          focusButton.setAttribute("aria-pressed", isMax ? "true" : "false");
-          const label = focusButton.querySelector(".ft-label");
-          if (label) {
-            label.textContent = isMax ? t.normalLabel : t.focusLabel;
-          }
-        }
-        document.querySelectorAll(".pe-w").forEach((buttonItem) => {
-          buttonItem.classList.toggle("on", buttonItem === widthButton);
+        keepReadingPosition(() => {
+          const isMax = widthButton.getAttribute("data-pw") === "max";
+          canvas.classList.toggle("is-wide", isMax);
+          localStorage.setItem("rw:pub-wide", isMax ? "true" : "false");
+          document.querySelectorAll(".pe-w").forEach((buttonItem) => {
+            buttonItem.classList.toggle("on", buttonItem === widthButton);
+          });
+          schedulePositionCards();
         });
-        schedulePositionCards();
       });
     });
 
     const downloadButton = document.getElementById("pubDownloadBtn");
     if (downloadButton) {
-      downloadButton.addEventListener("click", downloadPublishedDoc);
+      downloadButton.addEventListener("click", () => {
+        if (window.reviewableWorkbenchPublish) {
+          window.reviewableWorkbenchPublish.downloadPublishedDoc({ toastMessage: t.publishToast });
+        }
+      });
     }
   }
 
   function setPublished(on) {
-    document.body.classList.toggle("is-published", on);
-    const button = document.getElementById("publishToggle");
-    if (button) {
-      button.setAttribute("aria-pressed", on ? "true" : "false");
-      const label = button.querySelector(".pt-label");
-      if (label) {
-        label.textContent = on ? t.publishActive : t.publishLabel;
-      }
-    }
-    if (on) {
-      const canvas = document.getElementById("canvas");
-      const isFocus = canvas && canvas.classList.contains("is-focus");
-      document.querySelectorAll(".pe-w").forEach((widthButton) => {
-        const isMax = widthButton.getAttribute("data-pw") === "max";
-        widthButton.classList.toggle("on", isMax === Boolean(isFocus));
-      });
-    }
-    schedulePositionCards();
-  }
-
-  async function buildPublishedDoc() {
-    const shell = document.querySelector("#canvas .doc-shell");
-    if (!shell) {
-      return null;
-    }
-    const clone = shell.cloneNode(true);
-
-    clone.querySelectorAll(".toc, .cmt-rail, .doc-status, .byline, .cx-num").forEach((node) => node.remove());
-
-    clone.querySelectorAll(".cx").forEach((element) => {
-      const parent = element.parentNode;
-      if (!parent) {
-        return;
-      }
-      while (element.firstChild) {
-        parent.insertBefore(element.firstChild, element);
-      }
-      parent.removeChild(element);
-    });
-
-    clone.querySelectorAll("[data-comment]").forEach((node) => {
-      node.removeAttribute("data-comment");
-    });
-    clone.querySelectorAll("[data-cstate-host]").forEach((node) => {
-      node.removeAttribute("data-cstate-host");
-    });
-    clone.querySelectorAll("[data-review-block]").forEach((node) => {
-      node.removeAttribute("data-review-block");
-      node.removeAttribute("data-review-required");
-      node.removeAttribute("data-block-type");
-    });
-
-    clone.querySelectorAll(".review-comment-highlight").forEach((element) => {
-      const parent = element.parentNode;
-      if (!parent) {
-        return;
-      }
-      while (element.firstChild) {
-        parent.insertBefore(element.firstChild, element);
-      }
-      parent.removeChild(element);
-    });
-    clone.querySelectorAll(".review-comment-badge").forEach((node) => node.remove());
-
-    await embedImages(clone);
-
-    const root = document.documentElement;
-    const density = root.getAttribute("data-density") || "compact";
-    const docLang = root.lang || "ja";
-    const canvas = document.getElementById("canvas");
-    const isFocus = canvas && canvas.classList.contains("is-focus");
-    const titleElement = clone.querySelector(".doc-title");
-    const title = titleElement ? titleElement.textContent.trim() : "document";
-
-    const summaryEl = clone.querySelector(".summary p");
-    const firstP = clone.querySelector(".document-content .block-content p");
-    const description = (summaryEl || firstP || { textContent: "" }).textContent.trim().slice(0, 200);
-
-    const eyebrow = clone.querySelector(".eyebrow");
-    if (eyebrow) {
-      eyebrow.innerHTML = '<a href="https://github.com/u-ichi/reviewable-html-workbench" ' +
-        'style="color:inherit;text-decoration:none;" target="_blank" rel="noopener">' +
-        escapeHtml(eyebrow.textContent.trim()) + "</a>";
-    }
-
-    const css = await collectCSS();
-    var darkOverrides =
-      "@media(prefers-color-scheme:dark){:root{" +
-      "--bg-app:#131519;--bg-rail:#171a1f;--paper:#1c1f24;--paper-2:#20242a;" +
-      "--ink:#e7e3da;--ink-2:#a6a299;--ink-3:#7d7a72;--ink-faint:#5b5851;" +
-      "--line-1:#2c2f35;--line-2:#393d44;--line-3:#4a4e56;" +
-      "--brand:#6ea4dc;--brand-soft:#1f2d3c;" +
-      "--open:#6ea4dc;--open-bg:#1c2c3b;--open-line:#355472;" +
-      "--reply:#d6a85a;--reply-bg:#352c18;--reply-line:#604c25;" +
-      "--resolved:#6dba88;--resolved-bg:#1c2e23;--resolved-line:#345240;" +
-      "--code-bg:#15181d;--code-bg-2:#1b1f25;--code-line:#262b32;" +
-      "--sh-1:0 1px 2px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.04);" +
-      "--sh-2:0 2px 8px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.05);" +
-      "--sh-3:0 10px 30px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.4);" +
-      "--focus-ring:0 0 0 3px color-mix(in srgb,var(--brand) 40%,transparent);" +
-      "}}";
-    const html =
-      "<!DOCTYPE html>\n<html lang=\"" + docLang + "\" data-density=\"" + density + "\">\n" +
-      "<head>\n<meta charset=\"utf-8\">\n" +
-      "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
-      "<title>" + escapeHtml(title) + "</title>\n" +
-      '<meta property="og:title" content="' + escapeHtml(title) + '">\n' +
-      '<meta property="og:description" content="' + escapeHtml(description) + '">\n' +
-      '<meta property="og:type" content="article">\n' +
-      '<meta name="twitter:card" content="summary">\n' +
-      '<meta name="twitter:title" content="' + escapeHtml(title) + '">\n' +
-      '<meta name="twitter:description" content="' + escapeHtml(description) + '">\n' +
-      "<style>\n" + css +
-      "\n/* published export overrides */\n" +
-      "html,body{background:var(--bg-app);}\n" +
-      ".canvas{overflow:visible;height:auto;min-height:100vh;}\n" +
-      darkOverrides + "\n" +
-      "</style>\n</head>\n" +
-      "<body class=\"is-published\">\n" +
-      "<main class=\"canvas" + (isFocus ? " is-focus" : "") + "\">\n" +
-      clone.outerHTML + "\n</main>\n</body>\n</html>\n";
-    return { html, title };
-  }
-
-  async function collectCSS() {
-    let css = "";
-    for (let index = 0; index < document.styleSheets.length; index += 1) {
-      try {
-        const rules = document.styleSheets[index].cssRules;
-        for (let ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
-          css += rules[ruleIndex].cssText + "\n";
-        }
-      } catch (_error) {
-        var href = document.styleSheets[index].href;
-        if (href) {
-          try {
-            var resp = await fetch(href);
-            if (resp.ok) {
-              css += (await resp.text()) + "\n";
-            }
-          } catch (_fetchError) { /* skip */ }
+    keepReadingPosition(() => {
+      document.body.classList.toggle("is-published", on);
+      const button = document.getElementById("publishToggle");
+      if (button) {
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+        const label = button.querySelector(".pt-label");
+        if (label) {
+          label.textContent = on ? t.publishActive : t.publishLabel;
         }
       }
-    }
-    return css;
-  }
-
-  async function embedImages(container) {
-    var imgs = container.querySelectorAll("img[src]");
-    var promises = Array.prototype.map.call(imgs, function(img) {
-      var src = img.getAttribute("src");
-      if (!src || src.startsWith("data:")) {
-        return Promise.resolve();
+      if (on) {
+        const canvas = document.getElementById("canvas");
+        if (canvas) {
+          const storedWide = localStorage.getItem("rw:pub-wide") === "true";
+          canvas.classList.toggle("is-wide", storedWide);
+          document.querySelectorAll(".pe-w").forEach((widthButton) => {
+            const isMax = widthButton.getAttribute("data-pw") === "max";
+            widthButton.classList.toggle("on", isMax === storedWide);
+          });
+        }
       }
-      var origImg = document.querySelector('img[src="' + CSS.escape(src) + '"]') ||
-                    document.querySelector('img[src="' + src + '"]');
-      if (origImg && origImg.naturalWidth > 0 && origImg.complete) {
-        try {
-          var cvs = document.createElement("canvas");
-          cvs.width = origImg.naturalWidth;
-          cvs.height = origImg.naturalHeight;
-          cvs.getContext("2d").drawImage(origImg, 0, 0);
-          img.setAttribute("src", cvs.toDataURL("image/png"));
-          return Promise.resolve();
-        } catch (_canvasError) { /* fall through to fetch */ }
-      }
-      return fetch(src).then(function(r) { return r.blob(); }).then(function(blob) {
-        return new Promise(function(resolve) {
-          var reader = new FileReader();
-          reader.onloadend = function() {
-            img.setAttribute("src", reader.result);
-            resolve();
-          };
-          reader.onerror = function() { resolve(); };
-          reader.readAsDataURL(blob);
-        });
-      }).catch(function() { /* keep original src */ });
+      schedulePositionCards();
     });
-    await Promise.all(promises);
-  }
-
-  function slugify(value) {
-    return (value || "document").replace(/[\\/:*?"<>|\s]+/g, "_").replace(/_+/g, "_").slice(0, 48) || "document";
-  }
-
-  function toast(message) {
-    const element = document.createElement("div");
-    element.className = "pub-toast";
-    element.innerHTML = [
-      '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 5"/></svg>',
-      escapeHtml(message),
-    ].join("");
-    document.body.appendChild(element);
-    window.requestAnimationFrame(() => {
-      element.classList.add("show");
-    });
-    window.setTimeout(() => {
-      element.classList.remove("show");
-      window.setTimeout(() => {
-        element.remove();
-      }, 240);
-    }, 2600);
-  }
-
-  async function downloadPublishedDoc() {
-    const doc = await buildPublishedDoc();
-    if (!doc) {
-      return;
-    }
-    const blob = new Blob([doc.html], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = slugify(doc.title) + ".html";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => {
-      URL.revokeObjectURL(url);
-    }, 1500);
-    toast(t.publishToast);
   }
 
   function initTocScrollSpy() {
@@ -1187,7 +1482,9 @@
       return;
     }
     const links = Array.from(toc.querySelectorAll("a[href^='#']"));
-    const headings = Array.from(document.querySelectorAll(".prose h2[id], [data-review-block] h2[id], h2[id]"));
+    // 現在位置の判定は block を対象にする。目次のリンク先は block の id であり、
+    // 見出し要素 (h2 等) には id が付かないため、見出しを対象にすると常に該当なしになる
+    const blocks = Array.from(document.querySelectorAll(".prose [data-review-block][id]"));
     const canvas = document.getElementById("canvas");
     links.forEach((link) => {
       link.addEventListener("click", (event) => {
@@ -1197,16 +1494,18 @@
         if (!target) {
           return;
         }
+        const heading = target.querySelector(":scope > h2, :scope > h3, :scope > h4") || target;
         const sc = canvas || document.documentElement;
-        sc.scrollTop = target.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 72;
+        sc.scrollTop =
+          heading.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - TOC_JUMP_OFFSET;
       });
     });
-    const onScroll = rafThrottle(() => updateCurrentSection(links, headings));
+    const onScroll = rafThrottle(() => updateCurrentSection(links, blocks));
     if (canvas) {
       canvas.addEventListener("scroll", onScroll);
     }
     window.addEventListener("scroll", onScroll);
-    updateCurrentSection(links, headings);
+    updateCurrentSection(links, blocks);
 
     const tocList = toc.querySelector("ol.toc-list");
     if (tocList) {
@@ -1223,11 +1522,11 @@
     }
   }
 
-  function updateCurrentSection(links, headings) {
+  function updateCurrentSection(links, blocks) {
     let current = null;
-    for (const heading of headings) {
-      if (heading.getBoundingClientRect().top <= 100) {
-        current = heading;
+    for (const block of blocks) {
+      if (block.getBoundingClientRect().top <= 100) {
+        current = block;
       }
     }
     links.forEach((link) => link.classList.remove("current"));
@@ -1311,7 +1610,16 @@
     if (captureImageBlockClick(event)) {
       return;
     }
+    clearActiveComment();
     closeComposer();
+  }
+
+  function clearActiveComment() {
+    if (!state.activeCommentId) {
+      return;
+    }
+    state.activeCommentId = null;
+    setActiveClasses(null);
   }
 
   function captureImageBlockClick(event) {
@@ -1575,6 +1883,51 @@
       .replace(/"/g, "&quot;");
   }
 
+  // コメント本文の最小 Markdown 表示。> 引用 (入れ子可)・**強調**・`code` だけを
+  // HTML へ変換する。保存データと編集 textarea は生テキストのまま、表示だけ変える。
+  // 見出しやリンクは対応しない (コメントで実際に使われるのが引用と強調のため)
+  function renderCommentMarkdown(text) {
+    const lines = String(text || "").split("\n");
+    const parts = [];
+    let i = 0;
+    while (i < lines.length) {
+      if (/^\s*>/.test(lines[i])) {
+        const quoted = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) {
+          quoted.push(lines[i].replace(/^\s*> ?/, ""));
+          i += 1;
+        }
+        // 1 段むいた中身を再帰で処理すると > > の入れ子がそのまま入れ子 blockquote になる
+        parts.push("<blockquote>" + renderCommentMarkdown(quoted.join("\n")) + "</blockquote>");
+      } else {
+        const plain = [];
+        while (i < lines.length && !/^\s*>/.test(lines[i])) {
+          plain.push(lines[i]);
+          i += 1;
+        }
+        let segment = plain.join("\n");
+        // blockquote は block 要素で前後に視覚的な区切りが付くため、隣接する空行を
+        // pre-wrap でそのまま出すと余白が二重になる。引用に接する側の改行を 1 つ落とす
+        if (parts.length) {
+          segment = segment.replace(/^\n/, "");
+        }
+        if (i < lines.length) {
+          segment = segment.replace(/\n$/, "");
+        }
+        parts.push(renderInlineMarkdown(segment));
+      }
+    }
+    return parts.join("");
+  }
+
+  function renderInlineMarkdown(text) {
+    // escape が先、変換が後。逆にすると本文の HTML が script として解釈される
+    let s = escapeHtml(text);
+    s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+    return s;
+  }
+
   function formatDateTime(value) {
     if (!value) {
       return "";
@@ -1637,7 +1990,7 @@
 
   async function fetchAndMergeComments() {
     try {
-      var response = await fetch(COMMENTS_URL);
+      var response = await fetch(COMMENTS_URL, { cache: "no-store" });
       if (!response.ok) {
         return;
       }
@@ -1654,13 +2007,17 @@
     var oldMap = {};
     oldThreads.forEach(function (thread) { oldMap[thread.id] = thread; });
     var hasNewAgentReply = false;
+    var hasNewThread = false;
+    var changed = false;
+    var changedExistingThreads = [];
 
     newThreads.forEach(function (newThread) {
       var old = oldMap[newThread.id];
       if (!old) {
         state.comments.comments.push(newThread);
-        appendNewThreadCard(newThread);
         hasNewAgentReply = true;
+        hasNewThread = true;
+        changed = true;
         return;
       }
       var oldReplyCount = (old.replies || []).length;
@@ -1668,116 +2025,36 @@
       if (newReplyCount > oldReplyCount) {
         var addedReplies = newThread.replies.slice(oldReplyCount);
         old.replies = newThread.replies;
-        appendRepliesToCard(old.id, addedReplies);
         var hasAgent = addedReplies.some(function (r) { return r.role === "agent"; });
         if (hasAgent) {
           hasNewAgentReply = true;
-          highlightCard(old.id);
         }
+        if (changedExistingThreads.indexOf(old) === -1) {
+          changedExistingThreads.push(old);
+        }
+        changed = true;
       }
       if (old.status !== newThread.status) {
         old.status = newThread.status;
-        updateCardStatus(old.id, newThread);
+        if (changedExistingThreads.indexOf(old) === -1) {
+          changedExistingThreads.push(old);
+        }
+        changed = true;
       }
     });
 
+    if (!changed) {
+      return;
+    }
     writeLocalComments();
-    updateCommentCount();
+    if (hasNewThread) {
+      renderComments();
+    } else {
+      changedExistingThreads.forEach(refreshThreadDisplay);
+    }
     if (hasNewAgentReply) {
       toast(t.agentReplied);
     }
-  }
-
-  function appendNewThreadCard(thread) {
-    var layer = document.getElementById("cmtLayer");
-    if (!layer) {
-      renderComments();
-      return;
-    }
-    var number = state.comments.comments.length;
-    var card = document.createElement("div");
-    card.className = "cmt new-thread-enter";
-    card.id = cardId(thread.id);
-    card.dataset.for = thread.id;
-    card.innerHTML = cardInner(thread, number);
-    bindCommentCard(card, thread);
-    layer.appendChild(card);
-    schedulePositionCards();
-  }
-
-  function appendRepliesToCard(threadId, replies) {
-    var card = document.getElementById(cardId(threadId));
-    if (!card) {
-      return;
-    }
-    var threadDiv = card.querySelector(".cmt-thread");
-    if (!threadDiv) {
-      return;
-    }
-    replies.forEach(function (reply) {
-      var agentClass = reply.role === "agent" ? " from-agent" : "";
-      var html = [
-        '<div class="reply' + agentClass + '">',
-        '  <div class="av">' + escapeHtml(replyInitials(reply)) + '</div>',
-        "  <div>",
-        '    <div class="reply-name">' + escapeHtml(replyAuthor(reply)) + '<span class="reply-time">' + escapeHtml(formatDateTime(reply.created_at)) + '</span></div>',
-        '    <div class="reply-body">' + escapeHtml(reply.body) + '</div>',
-        "  </div>",
-        "</div>",
-      ].join("");
-      threadDiv.insertAdjacentHTML("beforeend", html);
-    });
-  }
-
-  function updateCardStatus(threadId, thread) {
-    var card = document.getElementById(cardId(threadId));
-    if (!card) {
-      return;
-    }
-    var stateSpan = card.querySelector(".cmt-state");
-    if (stateSpan) {
-      stateSpan.textContent = t.cardState[threadCardState(thread)] || "";
-    }
-    var foot = card.querySelector(".cmt-foot");
-    if (foot) {
-      var oldResolve = foot.querySelector("[data-thread-resolve]");
-      var oldReopen = foot.querySelector("[data-thread-reopen]");
-      if (oldResolve) { oldResolve.remove(); }
-      if (oldReopen) { oldReopen.remove(); }
-      var cs = threadCardState(thread);
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = cs === "resolved" ? "btn reopen" : "btn resolve";
-      btn.dataset[cs === "resolved" ? "threadReopen" : "threadResolve"] = "";
-      btn.textContent = cs === "resolved" ? t.reopenBtn : t.resolveBtn;
-      foot.insertBefore(btn, foot.firstChild);
-      if (cs === "resolved") {
-        btn.addEventListener("click", async function () {
-          thread.status = COMMENT_STATUS.needsAgentReview;
-          await saveComments();
-          renderComments();
-          activate(thread.id, false);
-        });
-      } else {
-        btn.addEventListener("click", async function () {
-          thread.status = COMMENT_STATUS.resolved;
-          await saveComments();
-          renderComments();
-          activate(thread.id, false);
-        });
-      }
-    }
-  }
-
-  function highlightCard(threadId) {
-    var card = document.getElementById(cardId(threadId));
-    if (!card) {
-      return;
-    }
-    card.classList.add("has-new-reply");
-    window.setTimeout(function () {
-      card.classList.remove("has-new-reply");
-    }, 3000);
   }
 
   function showUpdateBanner(message) {
@@ -1804,5 +2081,23 @@
     window.requestAnimationFrame(function () {
       banner.classList.add("show");
     });
+  }
+
+  function showSaveError(errorMessage) {
+    var existing = document.getElementById("reviewSaveError");
+    if (existing) {
+      existing.remove();
+    }
+    var banner = document.createElement("div");
+    banner.id = "reviewSaveError";
+    banner.className = "review-save-error";
+    banner.innerHTML = [
+      '<span class="rse-text">' + t.saveError + escapeHtml(errorMessage) + '</span>',
+      '<button type="button" class="rse-close" aria-label="close">&times;</button>',
+    ].join("");
+    banner.querySelector(".rse-close").addEventListener("click", function () {
+      banner.remove();
+    });
+    document.body.prepend(banner);
   }
 })();
