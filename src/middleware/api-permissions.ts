@@ -4,6 +4,9 @@ import type { AppBindings } from "../env";
 // APIキーに許可する操作を列挙する。管理操作と未分類の経路は許可しない。
 export const apiKeyPermissions = [
   { method: "GET", path: /^\/api\/v1\/whoami$/, scope: "read" },
+  // 端末から自分のキーを確認・取り消せるようにする。キーの発行はセッションだけに残す
+  { method: "GET", path: /^\/api\/v1\/api-keys$/, scope: "read" },
+  { method: "DELETE", path: /^\/api\/v1\/api-keys\/[^/]+$/, scope: "write" },
   { method: "GET", path: /^\/api\/v1\/projects$/, scope: "read" },
   { method: "GET", path: /^\/api\/v1\/projects\/[^/]+$/, scope: "read" },
   { method: "GET", path: /^\/api\/v1\/projects\/[^/]+\/(files|comments|comment-threads|review-content)$/, scope: "read" },

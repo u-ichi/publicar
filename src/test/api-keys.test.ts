@@ -1,6 +1,7 @@
 import { zipSync } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSession } from "../auth/session";
+import { createApiKey } from "../db/api-keys";
 import { upsertProjectFile } from "../db/project-files";
 import { createProject, updateProject, upsertProjectMember } from "../db/projects";
 import app from "../index";
@@ -224,6 +225,42 @@ describe("publicar worker", () => {
     const json = (await response.json()) as { raw_key: string };
     return json.raw_key;
   }
+
+  it("lets an API key list and revoke the user's own keys but not create keys", async () => {
+    const localEnv = testEnv();
+    const cookie = await authCookie(localEnv);
+    // CLI認証で発行されるキーと同じ、全scope・プロジェクト限定なしのキー
+    const { rawKey } = await createApiKey(localEnv, user.id, { name: "CLI", scopes: ["read", "write", "deploy"] });
+    await createTestApiKey(localEnv, cookie, "old-key");
+    const auth = { Authorization: `Bearer ${rawKey}` };
+
+    const listResponse = await app.fetch(new Request("http://localhost/api/v1/api-keys", { headers: auth }), localEnv);
+    expect(listResponse.status).toBe(200);
+    const list = (await listResponse.json()) as { api_keys: { id: string; name: string }[] };
+    const oldKey = list.api_keys.find((key) => key.name === "old-key")!;
+
+    const deleteResponse = await app.fetch(new Request(`http://localhost/api/v1/api-keys/${oldKey.id}`, { method: "DELETE", headers: auth }), localEnv);
+    expect(deleteResponse.status).toBe(200);
+    expect(await localEnv.DB.prepare("SELECT count(*) AS count FROM api_keys WHERE id = ?").bind(oldKey.id).first()).toEqual({ count: 0 });
+
+    // キーからの新しいキーの発行は引き続き拒否する
+    const createResponse = await app.fetch(new Request("http://localhost/api/v1/api-keys", {
+      method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ name: "escalated" })
+    }), localEnv);
+    expect(createResponse.status).toBe(403);
+  });
+
+  it("requires write scope to revoke keys with an API key", async () => {
+    const localEnv = testEnv();
+    const cookie = await authCookie(localEnv);
+    const readKey = await createTestApiKey(localEnv, cookie, "read-key", ["read"]);
+    const list = (await (await app.fetch(new Request("http://localhost/api/v1/api-keys", { headers: { Authorization: `Bearer ${readKey}` } }), localEnv)).json()) as { api_keys: { id: string }[] };
+
+    const response = await app.fetch(new Request(`http://localhost/api/v1/api-keys/${list.api_keys[0].id}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${readKey}` }
+    }), localEnv);
+    expect(response.status).toBe(403);
+  });
 
   it("authenticates API requests with an API key", async () => {
     const localEnv = testEnv();
