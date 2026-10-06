@@ -24,6 +24,21 @@ describe("organization security", () => {
     }
   });
 
+  it("lets a deploy key create a project but not a read key or a project-limited key", async () => {
+    const env = testEnv();
+    const create = (rawKey: string, alias: string) => app.fetch(new Request("http://localhost/api/v1/projects", {
+      method: "POST", headers: { Authorization: `Bearer ${rawKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ title: alias, alias })
+    }), env);
+    // CLI認証で発行されるキーと同じ、全scope・プロジェクト限定なしのキー
+    const { rawKey: cliKey } = await createApiKey(env, user.id, { name: "CLI", scopes: ["read", "write", "deploy"] });
+    expect((await create(cliKey, "created-by-cli")).status).toBe(201);
+    const { rawKey: readKey } = await createApiKey(env, user.id, { name: "reader", scopes: ["read"] });
+    expect((await create(readKey, "created-by-reader")).status).toBe(403);
+    const other = await createProject(env, user, { title: "Other", alias: "other-doc", visibility: "private" });
+    const { rawKey: limitedKey } = await createApiKey(env, user.id, { name: "limited", scopes: ["deploy"], projectId: other.id });
+    expect((await create(limitedKey, "created-by-limited")).status).toBe(403);
+  });
+
   it("rejects malformed stored key expiry", async () => {
     const env = testEnv();
     const { rawKey } = await createApiKey(env, user.id, { name: "invalid-expiry", scopes: ["read"], expiresAt: "invalid" });
