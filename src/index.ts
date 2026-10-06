@@ -4,9 +4,9 @@ import { createLoginUrl, handleOAuthCallback, oauthBrowserCookie } from "./auth/
 import { randomBase64Url } from "./lib/encoding";
 import { deleteOldAccessLogs } from "./db/access-logs";
 import type { AppBindings, Env } from "./env";
-import { requireAuth, requireGuestAllowlist, requireScope, resolveAuth } from "./middleware/auth";
-import { enforceApiKeyPermissions } from "./middleware/api-permissions";
-import { rejectCrossOriginMutation, requireRecentSession } from "./middleware/session-security";
+import { requireAuth, requireGuestAllowlist, resolveAuth } from "./middleware/auth";
+import { enforceLoginMethodRules } from "./middleware/api-permissions";
+import { rejectCrossOriginMutation } from "./middleware/session-security";
 import { securityAudit } from "./middleware/security-audit";
 import { apiKeysRoute } from "./routes/api-v1/api-keys";
 import { commentsRoute } from "./routes/api-v1/comments";
@@ -84,17 +84,9 @@ app.get("/llms.txt", llmsTxt);
 app.get("/api/v1/openapi.json", openapiSpec);
 
 app.use("*", resolveAuth);
-app.use("*", enforceApiKeyPermissions);
 app.use("/api/*", requireAuth);
 app.use("/api/*", requireGuestAllowlist);
-app.use("/api/*", async (c, next) => {
-  const path = new URL(c.req.url).pathname;
-  const managesKeys = /^\/api\/v1\/api-keys(?:\/|$)/.test(path) && (c.req.method === "POST" || c.get("authMethod") === "session");
-  const createsProjectWithKey = c.req.method === "POST" && /^\/api\/v1\/projects\/?$/.test(path) && c.get("authMethod") === "api-key";
-  const managesProject = c.req.method !== "GET" && !createsProjectWithKey && /^\/api\/v1\/projects(?:\/[^/]+(?:\/(?:members|access)(?:\/[^/]+)?)?)?\/?$/.test(path);
-  if (managesKeys || managesProject) return requireRecentSession(c, next);
-  return next();
-});
+app.use("*", enforceLoginMethodRules);
 
 app.get("/api/v1/whoami", (c) => {
   return c.json({ user: c.get("user") });
@@ -108,7 +100,7 @@ app.route("/api/v1/projects", projectsRoute);
 app.route("/api/v1/api-keys", apiKeysRoute);
 app.route("/api/v1/notifications", notificationsRoute);
 app.route("/api/v1/organization", organizationRoute);
-app.post("/api/v1/projects/:id/deploy", requireScope("deploy"), deployProject);
+app.post("/api/v1/projects/:id/deploy", deployProject);
 app.get("/p/:alias", serveProject);
 app.get("/p/:alias/", serveProject);
 app.get("/p/:alias/:path{.*}", serveProject);
@@ -119,6 +111,8 @@ app.get("/projects/:id/review", projectReview);
 app.get("/:alias", serveProject);
 app.get("/:alias/", serveProject);
 app.get("/:alias/:path{.*}", serveProject);
+
+export { app };
 
 export default {
   fetch: app.fetch,

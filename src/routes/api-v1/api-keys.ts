@@ -1,8 +1,7 @@
 import { Hono } from "hono";
-import { createApiKey, deleteApiKey, expirationTime, listApiKeys, validateScopes, type Scope } from "../../db/api-keys";
+import { API_KEY_MAX_DAYS, createApiKey, deleteApiKey, expirationTime, listApiKeys } from "../../db/api-keys";
 import type { AppBindings } from "../../env";
 import { readJsonObject } from "../../lib/request";
-import { canEditProject, getProjectRole } from "../../db/projects";
 
 export const apiKeysRoute = new Hono<AppBindings>();
 
@@ -17,37 +16,18 @@ apiKeysRoute.post("/", async (c) => {
     return c.json({ error: "name is required" }, 400);
   }
 
-  let scopes: Scope[] | undefined;
-  if (body.scopes !== undefined) {
-    const validated = validateScopes(body.scopes);
-    if (!validated) {
-      return c.json({ error: "invalid scopes" }, 400);
-    }
-    scopes = validated;
+  // キーは本人として扱うため、権限やプロジェクトでの絞り込みは受け付けない
+  if (body.scopes !== undefined || body.project_id !== undefined) {
+    return c.json({ error: "api_key_restrictions_unsupported" }, 400);
   }
 
   const expiresAt = body.expires_at === undefined || body.expires_at === null ? null : body.expires_at;
   if (expiresAt !== null && (typeof expiresAt !== "string" || !(expirationTime(expiresAt) > Date.now()))) {
     return c.json({ error: "invalid expires_at" }, 400);
   }
-  if (expiresAt && Date.parse(expiresAt) > Date.now() + 90 * 86400000) return c.json({ error: "expiry_exceeds_90_days" }, 400);
-  const projectId = body.project_id;
-  if (projectId !== undefined && (typeof projectId !== "string" || !projectId)) return c.json({ error: "invalid_project_id" }, 400);
-  if (projectId) {
-    const role = await getProjectRole(c.env, projectId, c.get("user").id);
-    if (!role || ((scopes ?? ["read"]).some((scope) => scope !== "read") && !canEditProject(role))) {
-      return c.json({ error: "forbidden" }, 403);
-    }
-  } else if ((scopes ?? ["read"]).some((scope) => scope !== "read")) {
-    return c.json({ error: "project_id_required" }, 400);
-  }
+  if (expiresAt && Date.parse(expiresAt) > Date.now() + API_KEY_MAX_DAYS * 86400000) return c.json({ error: "expiry_exceeds_365_days" }, 400);
 
-  const { apiKey, rawKey } = await createApiKey(c.env, c.get("user").id, {
-    name,
-    scopes,
-    expiresAt,
-    projectId: typeof projectId === "string" ? projectId : null
-  });
+  const { apiKey, rawKey } = await createApiKey(c.env, c.get("user").id, { name, expiresAt });
   return c.json({ ok: true, api_key: apiKey, raw_key: rawKey }, 201);
 });
 

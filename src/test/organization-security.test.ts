@@ -9,60 +9,41 @@ import { editorUser, mockDriveUploads, resetDatabase, seedUser, testEnv, user } 
 describe("organization security", () => {
   beforeEach(async () => { vi.unstubAllGlobals(); await resetDatabase(testEnv()); await seedUser(testEnv()); });
 
-  it("does not let a read key issue another key or change visibility", async () => {
+  it("does not let an API key issue new credentials", async () => {
     const env = testEnv();
-    const { rawKey } = await createApiKey(env, user.id, { name: "reader", scopes: ["read"] });
+    const { rawKey } = await createApiKey(env, user.id, { name: "CLI" });
     const project = await createProject(env, user, { title: "Private", alias: "private-doc", visibility: "private" });
-    for (const [method, path, body] of [
-      ["POST", "/api/v1/api-keys", { name: "escaped" }],
-      ["PATCH", `/api/v1/projects/${project.id}`, { visibility: "public" }]
+    // キーから新しい認証情報を作らせない（sessionOnlyOperations）
+    for (const [path, body] of [
+      ["/api/v1/api-keys", { name: "escaped" }],
+      [`/api/v1/projects/${project.id}/upload-keys`, { name: "escaped", expires_at: new Date(Date.now() + 86400000).toISOString() }]
     ] as const) {
       const response = await app.fetch(new Request(`http://localhost${path}`, {
-        method, headers: { Authorization: `Bearer ${rawKey}`, "Content-Type": "application/json" }, body: JSON.stringify(body)
+        method: "POST", headers: { Authorization: `Bearer ${rawKey}`, "Content-Type": "application/json" }, body: JSON.stringify(body)
       }), env);
       expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: "session_required" });
     }
   });
 
-  it("lets a deploy key create a project but not a read key or a project-limited key", async () => {
+  it("lets an API key create and delete the user's own project", async () => {
     const env = testEnv();
-    const create = (rawKey: string, alias: string) => app.fetch(new Request("http://localhost/api/v1/projects", {
-      method: "POST", headers: { Authorization: `Bearer ${rawKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ title: alias, alias })
+    const { rawKey } = await createApiKey(env, user.id, { name: "CLI" });
+    const headers = { Authorization: `Bearer ${rawKey}`, "Content-Type": "application/json" };
+    const created = await app.fetch(new Request("http://localhost/api/v1/projects", {
+      method: "POST", headers, body: JSON.stringify({ title: "created-by-cli", alias: "created-by-cli" })
     }), env);
-    // CLI認証で発行されるキーと同じ、全scope・プロジェクト限定なしのキー
-    const { rawKey: cliKey } = await createApiKey(env, user.id, { name: "CLI", scopes: ["read", "write", "deploy"] });
-    expect((await create(cliKey, "created-by-cli")).status).toBe(201);
-    const { rawKey: readKey } = await createApiKey(env, user.id, { name: "reader", scopes: ["read"] });
-    expect((await create(readKey, "created-by-reader")).status).toBe(403);
-    const other = await createProject(env, user, { title: "Other", alias: "other-doc", visibility: "private" });
-    const { rawKey: limitedKey } = await createApiKey(env, user.id, { name: "limited", scopes: ["deploy"], projectId: other.id });
-    expect((await create(limitedKey, "created-by-limited")).status).toBe(403);
+    expect(created.status).toBe(201);
+    const { project } = (await created.json()) as { project: { id: string } };
+    const deleted = await app.fetch(new Request(`http://localhost/api/v1/projects/${project.id}`, { method: "DELETE", headers }), env);
+    expect(deleted.status).toBe(200);
   });
 
   it("rejects malformed stored key expiry", async () => {
     const env = testEnv();
-    const { rawKey } = await createApiKey(env, user.id, { name: "invalid-expiry", scopes: ["read"], expiresAt: "invalid" });
+    const { rawKey } = await createApiKey(env, user.id, { name: "invalid-expiry", expiresAt: "invalid" });
     const response = await app.fetch(new Request("http://localhost/api/v1/whoami", { headers: { Authorization: `Bearer ${rawKey}` } }), env);
     expect(response.status).toBe(401);
-  });
-
-  it("restricts a deploy key to its project even when its owner owns both projects", async () => {
-    const env = testEnv();
-    const a = await createProject(env, user, { title: "A", alias: "project-a", visibility: "private" });
-    const b = await createProject(env, user, { title: "B", alias: "project-b", visibility: "private" });
-    const { rawKey, apiKey } = await createApiKey(env, user.id, { name: "A only", scopes: ["deploy"], projectId: a.id });
-    const fetchMock = mockDriveUploads();
-    const request = (path: string, method = "POST") => app.fetch(new Request(`http://localhost${path}`, {
-      method, headers: { Authorization: `Bearer ${rawKey}`, "Content-Type": "text/html" }, ...(method === "GET" ? {} : { body: "<h1>A</h1>" })
-    }), env);
-    expect((await request(`/api/v1/projects/${b.id}/deploy`)).status).toBe(403);
-    expect((await request(`/api/v1/projects/${b.id}`, "GET")).status).toBe(403);
-    expect((await request("/api/v1/projects", "GET")).status).toBe(403);
-    expect((await request(`/projects/${a.id}`, "GET")).status).toBe(403);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect((await request(`/api/v1/projects/${a.id}/deploy?path=index.html`)).status).toBe(200);
-    await env.DB.prepare("UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ?").bind(apiKey.id).run();
-    expect((await request(`/api/v1/projects/${a.id}/deploy`)).status).toBe(401);
   });
 
   it("rejects cross-origin session writes and audits denied operations", async () => {

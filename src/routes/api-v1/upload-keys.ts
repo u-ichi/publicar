@@ -10,7 +10,6 @@ import { driveFailureResponse } from "./drive-errors";
 
 export const uploadKeysRoute = new Hono<AppBindings>();
 const requireOwner: MiddlewareHandler<AppBindings> = async (c, next) => {
-  if (c.get("authMethod") !== "session") return c.json({ error: "session_required" }, 403);
   if (await getProjectRole(c.env, c.req.param("id")!, c.get("user").id) !== "owner") {
     return c.json({ error: "project_owner_required" }, 403);
   }

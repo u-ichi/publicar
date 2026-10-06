@@ -51,7 +51,6 @@ export const resolveAuth: MiddlewareHandler<AppBindings> = async (c, next) => {
     }
     c.set("authMethod", "api-key");
     c.set("apiKeyId", keyInfo.id);
-    c.set("apiKeyProjectId", keyInfo.projectId);
     if (keyInfo.revokedAt) return c.json({ error: "api_key_revoked" }, 401);
     if (keyInfo.expiresAt !== null && !(expirationTime(keyInfo.expiresAt) > Date.now())) {
       return c.json({ error: "api_key_expired" }, 401);
@@ -70,7 +69,6 @@ export const resolveAuth: MiddlewareHandler<AppBindings> = async (c, next) => {
     c.set("user", user);
     c.set("principal", { kind: "user", user });
     c.set("authMethod", "api-key");
-    c.set("apiKeyScopes", keyInfo.scopes);
     c.set("apiKeyId", keyInfo.id);
     await updateApiKeyLastUsed(c.env, keyInfo.id);
     return next();
@@ -115,15 +113,3 @@ export const requireGuestAllowlist: MiddlewareHandler<AppBindings> = async (c, n
   }
   return next();
 };
-
-export function requireScope(scope: string): MiddlewareHandler<AppBindings> {
-  return async (c, next) => {
-    if (c.get("authMethod") === "api-key") {
-      const scopes = c.get("apiKeyScopes") ?? [];
-      if (!scopes.includes(scope)) {
-        return c.json({ error: "insufficient_scope", required: scope }, 403);
-      }
-    }
-    return next();
-  };
-}

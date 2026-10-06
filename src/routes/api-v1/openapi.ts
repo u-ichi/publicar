@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { AppBindings } from "../../env";
-import { apiKeyPermissions } from "../../middleware/api-permissions";
+import { findLoginMethodRule } from "../../middleware/api-permissions";
 
 const SPEC = {
   openapi: "3.1.0",
@@ -16,7 +16,7 @@ const SPEC = {
       bearerAuth: {
         type: "http",
         scheme: "bearer",
-        description: "公開先・scope・期限を制限したAPIキー。管理操作には使用不可"
+        description: "pub_で始まる本人のAPIキー。ログインした本人と同じ操作ができる。キーの発行と組織管理には使用不可"
       },
       uploadKeyAuth: {
         type: "http", scheme: "bearer", description: "upl_で始まるプロジェクト所属のアップロード専用キー。指定プロジェクトのPOST deployだけに使用できる"
@@ -321,9 +321,7 @@ const SPEC = {
                 required: ["name"],
                 properties: {
                   name: { type: "string" },
-                  scopes: { type: "array", default: ["read"], items: { type: "string", enum: ["read", "write", "deploy"] } },
-                  project_id: { type: "string", description: "write/deployでは必須。readで省略するとアカウント情報と利用者に閲覧権限があるプロジェクトを読み取れる" },
-                  expires_at: { type: "string", format: "date-time", description: "UTCのISO日時。既定30日、最長90日" }
+                  expires_at: { type: "string", format: "date-time", description: "UTCのISO日時。既定365日、最長365日。キーは本人と同じ操作ができ、権限やプロジェクトでの絞り込みはない" }
                 }
               }
             }
@@ -348,7 +346,7 @@ const SPEC = {
     },
     "/api/v1/projects/{id}/upload-keys": {
       get: { summary: "プロジェクト所有者がアップロードキーのメタデータを取得", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        responses: { "200": { description: "keys配列。原文とハッシュは含めない" }, "403": { description: "所有者のログインセッションが必要" } } },
+        responses: { "200": { description: "keys配列。原文とハッシュは含めない" }, "403": { description: "プロジェクトの所有者でない" } } },
       post: {
         summary: "プロジェクト所有者がアップロード専用キーを発行",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
@@ -362,7 +360,7 @@ const SPEC = {
     "/api/v1/projects/{id}/upload-keys/{keyId}": {
       delete: { summary: "プロジェクト所有者がアップロードキーを取り消す", parameters: [
         { name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "keyId", in: "path", required: true, schema: { type: "string" } }
-      ], responses: { "200": { description: "取消済み。転送中の要求も公開確定時に拒否" }, "403": { description: "所有者のログインセッションが必要" }, "404": { description: "該当キーなし" } } }
+      ], responses: { "200": { description: "取消済み。転送中の要求も公開確定時に拒否" }, "403": { description: "プロジェクトの所有者でない" }, "404": { description: "該当キーなし" } } }
     },
     "/api/v1/organization/security-events": {
       get: { summary: "監査記録の直近100件。CI実行元のヘッダーは申告値", responses: { "200": { description: "監査記録" } } }
@@ -379,12 +377,12 @@ const SPEC = {
 export function openapiSpec(c: Context<AppBindings>): Response {
   const paths = Object.fromEntries(Object.entries(SPEC.paths).map(([path, operations]) => [path,
     Object.fromEntries(Object.entries(operations).map(([method, operation]) => {
-      const permission = apiKeyPermissions.find(item => item.method === method.toUpperCase() && item.path.test(path.replace(/\{[^}]+\}/g, "id")));
+      const sessionOnly = findLoginMethodRule(method.toUpperCase(), path.replace(/\{([^}]+)\}/g, ":$1"))?.sessionOnly ?? false;
       const uploads = path === "/api/v1/projects/{id}/deploy" && method === "post";
-      const security = permission ? [{ sessionAuth: [] }, { bearerAuth: [] }, ...(uploads ? [{ uploadKeyAuth: [] }] : [])] : [{ sessionAuth: [] }];
+      const security = sessionOnly ? [{ sessionAuth: [] }] : [{ sessionAuth: [] }, { bearerAuth: [] }, ...(uploads ? [{ uploadKeyAuth: [] }] : [])];
       const detail = "description" in operation ? operation.description + " " : "";
-      const auth = uploads ? "人のAPIキーはdeploy scopeと利用者の編集権限、アップロード専用キーはプロジェクト・期限・取消状態を確認する。" :
-        permission ? `APIキーは${permission.scope} scopeが必要。公開先と利用者の権限も確認する。` : "ログインしたセッションが必要。APIキーでは実行不可。";
+      const auth = sessionOnly ? "ログインしたセッションが必要。APIキーでは実行不可。" :
+        uploads ? "セッションとAPIキーは利用者の編集権限、アップロード専用キーはプロジェクト・期限・取消状態を確認する。" : "セッションとAPIキーのどちらでも、利用者の権限を確認する。";
       return [method, { ...operation, security, description: detail + auth }];
     }))
   ]));

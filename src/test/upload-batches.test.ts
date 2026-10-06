@@ -184,7 +184,7 @@ describe("split uploads", () => {
   it("checks API-key revocation inside publication and protects a concurrent file deletion", async () => {
     const { env, project, cookie, send, manifest } = await setup();
     mockServiceDrive();
-    const api = await createApiKey(env, user.id, { name: "API", scopes: ["deploy"], projectId: project.id });
+    const api = await createApiKey(env, user.id, { name: "API" });
     const body = await manifest({ "index.html": "abc" });
     expect((await send("start", body, "api", api.rawKey)).status).toBe(201);
     expect((await send("file&path=index.html", "abc", "api", api.rawKey)).status).toBe(200);

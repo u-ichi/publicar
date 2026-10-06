@@ -1,39 +1,53 @@
-import type { MiddlewareHandler } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
+import { matchedRoutes } from "hono/route";
+import { getStoredSession } from "../auth/session";
 import type { AppBindings } from "../env";
 
-// APIキーに許可する操作を列挙する。管理操作と未分類の経路は許可しない。
-export const apiKeyPermissions = [
-  { method: "GET", path: /^\/api\/v1\/whoami$/, scope: "read" },
-  // 端末から自分のキーを確認・取り消せるようにする。キーの発行はセッションだけに残す
-  { method: "GET", path: /^\/api\/v1\/api-keys$/, scope: "read" },
-  { method: "DELETE", path: /^\/api\/v1\/api-keys\/[^/]+$/, scope: "write" },
-  { method: "GET", path: /^\/api\/v1\/projects$/, scope: "read" },
-  // CLIから新しい記事をデプロイする時にプロジェクトを作る。公開範囲の変更やメンバー管理は許可しない
-  { method: "POST", path: /^\/api\/v1\/projects$/, scope: "deploy" },
-  { method: "GET", path: /^\/api\/v1\/projects\/[^/]+$/, scope: "read" },
-  { method: "GET", path: /^\/api\/v1\/projects\/[^/]+\/(files|comments|comment-threads|review-content)$/, scope: "read" },
-  { method: "POST", path: /^\/api\/v1\/projects\/[^/]+\/deploy$/, scope: "deploy" },
-  { method: "POST", path: /^\/api\/v1\/projects\/[^/]+\/comments(?:\/[^/]+\/replies)?$/, scope: "write" },
-  { method: "PATCH", path: /^\/api\/v1\/projects\/[^/]+\/comments\/[^/]+$/, scope: "write" },
-  { method: "DELETE", path: /^\/api\/v1\/projects\/[^/]+\/comments\/[^/]+$/, scope: "write" },
-  { method: "DELETE", path: /^\/api\/v1\/projects\/[^/]+\/files$/, scope: "write" }
+// APIキーは発行した本人として扱い、ブラウザのログインと同じ操作を許可する。
+// ログイン方法で扱いを変える操作は、この表だけに置く。
+// - sessionOnly: ブラウザのログインだけに許す（APIキーでは拒否）
+// - recentLogin: ブラウザのログインでは、直近15分以内のログインを求める
+// 照合にはルーターが選んだルートの定義パスを使う。リクエストURLの文字列で照合すると、符号化したパスで迂回されるため。
+export const loginMethodRules = [
+  // キーから新しい認証情報を作らせない。漏れたキーは取り消せば使えなくなる
+  { method: "POST", path: "/api/v1/api-keys", sessionOnly: true, recentLogin: true },
+  { method: "POST", path: "/api/v1/projects/:id/upload-keys", sessionOnly: true, recentLogin: false },
+  // 組織管理者の操作（利用者の無効化など）
+  { method: "GET", path: "/api/v1/organization/security-events", sessionOnly: true, recentLogin: true },
+  { method: "GET", path: "/api/v1/organization/users/:id/revocation-impact", sessionOnly: true, recentLogin: true },
+  { method: "POST", path: "/api/v1/organization/users/:id/disable", sessionOnly: true, recentLogin: true },
+  // キー・プロジェクト・メンバー・招待の管理
+  { method: "GET", path: "/api/v1/api-keys", sessionOnly: false, recentLogin: true },
+  { method: "DELETE", path: "/api/v1/api-keys/:id", sessionOnly: false, recentLogin: true },
+  { method: "POST", path: "/api/v1/projects", sessionOnly: false, recentLogin: true },
+  { method: "PATCH", path: "/api/v1/projects/:id", sessionOnly: false, recentLogin: true },
+  { method: "DELETE", path: "/api/v1/projects/:id", sessionOnly: false, recentLogin: true },
+  { method: "POST", path: "/api/v1/projects/:id/members", sessionOnly: false, recentLogin: true },
+  { method: "PATCH", path: "/api/v1/projects/:id/members/:userId", sessionOnly: false, recentLogin: true },
+  { method: "DELETE", path: "/api/v1/projects/:id/members/:userId", sessionOnly: false, recentLogin: true },
+  { method: "POST", path: "/api/v1/projects/:id/access", sessionOnly: false, recentLogin: true },
+  { method: "DELETE", path: "/api/v1/projects/:id/access/:accessId", sessionOnly: false, recentLogin: true }
 ] as const;
 
-export const enforceApiKeyPermissions: MiddlewareHandler<AppBindings> = async (c, next) => {
-  if (c.get("authMethod") !== "api-key") return next();
-  const pathname = new URL(c.req.url).pathname.replace(/\/$/, "");
-  const permission = apiKeyPermissions.find((item) => item.method === c.req.method && item.path.test(pathname));
-  if (!permission) return c.json({ error: "session_required" }, 403);
-  if (!(c.get("apiKeyScopes") ?? []).includes(permission.scope)) {
-    return c.json({ error: "insufficient_scope", required: permission.scope }, 403);
-  }
-  const projectId = pathname.match(/^\/api\/v1\/projects\/([^/]+)/)?.[1];
-  const allowedProjectId = c.get("apiKeyProjectId");
-  if (projectId && allowedProjectId && decodeURIComponent(projectId) !== allowedProjectId) {
-    return c.json({ error: "project_not_allowed" }, 403);
-  }
-  if (allowedProjectId && !projectId && pathname !== "/api/v1/whoami") {
-    return c.json({ error: "project_not_allowed" }, 403);
+export function findLoginMethodRule(method: string, routePath: string) {
+  return loginMethodRules.find((rule) => rule.method === method && rule.path === routePath);
+}
+
+// ルーターが選んだルートのうち、処理本体（use ではないもの）に当てはまる規則を返す
+function matchedRules(c: Context<AppBindings>) {
+  return matchedRoutes(c).filter((route) => route.method !== "ALL").map((route) => findLoginMethodRule(route.method, route.path)).filter((rule) => rule !== undefined);
+}
+
+export const enforceLoginMethodRules: MiddlewareHandler<AppBindings> = async (c, next) => {
+  const rules = matchedRules(c);
+  if (rules.length === 0) return next();
+  const authMethod = c.get("authMethod");
+  if (rules.some((rule) => rule.sessionOnly) && authMethod !== "session") return c.json({ error: "session_required" }, 403);
+  if (authMethod === "session" && rules.some((rule) => rule.recentLogin)) {
+    const session = await getStoredSession(c.req.raw, c.env);
+    if (!session || Date.now() - session.createdAt > 15 * 60000) {
+      return c.json({ error: "reauthentication_required", login_url: "/auth/login" }, 403);
+    }
   }
   return next();
 };
