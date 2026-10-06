@@ -44,12 +44,13 @@ export async function consumeCliAuthState(env: Env, state: string): Promise<{ ap
   return { apiKeyRaw: await decryptToken(row.api_key_raw, env.TOKEN_ENCRYPTION_KEY) };
 }
 
+// CLIはブラウザ起動直後から問い合わせるため、ブラウザが認証要求を登録する前の未登録と、
+// キー発行中も待機中として扱う。期限切れ・受け取り済みだけを null にする
 export async function findCliAuthState(env: Env, state: string): Promise<"pending" | null> {
   const now = Math.floor(Date.now() / 1000);
-  const row = await env.DB.prepare(
-    "SELECT 1 FROM cli_auth_states WHERE state = ? AND status = 'pending' AND expires_at > ?"
-  )
-    .bind(state, now)
-    .first();
-  return row ? "pending" : null;
+  const row = await env.DB.prepare("SELECT status, expires_at FROM cli_auth_states WHERE state = ?")
+    .bind(state)
+    .first<{ status: string; expires_at: number }>();
+  if (!row) return "pending";
+  return (row.status === "pending" || row.status === "authorizing") && row.expires_at > now ? "pending" : null;
 }

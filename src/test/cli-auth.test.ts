@@ -2,26 +2,16 @@ import { zipSync } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiKey } from "../db/api-keys";
 import { encryptToken } from "../lib/crypto";
-import { createSession } from "../auth/session";
 import { upsertProjectFile } from "../db/project-files";
 import { createProject, updateProject, upsertProjectMember } from "../db/projects";
 import app from "../index";
 import { getValidAccessToken } from "../lib/token-refresh";
-import { authCookie, avatarUser, editorUser, jsonResponse, mockDriveUploads, resetDatabase, seedUser, testEnv, user, type Env } from "./helpers";
+import { authCookie, avatarUser, jsonResponse, mockDriveUploads, resetDatabase, seedUser, testEnv, user, type Env } from "./helpers";
 
 describe("CLI Auth Flow", () => {
   beforeEach(async () => {
     await resetDatabase(testEnv());
   });
-
-  async function confirm(localEnv: Env, cookie: string, state: string, response: Response): Promise<Response> {
-    const html = await response.text();
-    const confirmation = html.match(/name="confirmation" value="([^"]+)"/)?.[1];
-    expect(confirmation).toBeTruthy();
-    return app.fetch(new Request("http://localhost/auth/cli/confirm", {
-      method: "POST", headers: { Cookie: cookie }, body: new URLSearchParams({ state, confirmation: confirmation!, device_name: "Test terminal", approved: "yes" })
-    }), localEnv);
-  }
 
   it("initiates CLI auth flow and redirects to OAuth login", async () => {
     const localEnv = testEnv();
@@ -83,12 +73,9 @@ describe("CLI Auth Flow", () => {
       localEnv
     );
 
+    // 同意画面を挟まず、ログイン後のcallbackでキーを発行する
     expect(response.status).toBe(200);
-    const before = await localEnv.DB.prepare("SELECT count(*) AS count FROM api_keys").first<{ count: number }>();
-    expect(before?.count).toBe(0);
-    const confirmed = await confirm(localEnv, cookie, state, response);
-    expect(confirmed.status).toBe(200);
-    expect(await confirmed.text()).toContain("CLI 認証完了");
+    expect(await response.text()).toContain("CLI 認証完了");
 
     const row = await localEnv.DB.prepare("SELECT status, api_key_raw FROM cli_auth_states WHERE state = ?")
       .bind(state)
@@ -184,13 +171,14 @@ describe("CLI Auth Flow", () => {
     await expect(response.json()).resolves.toEqual({ status: "pending" });
   });
 
-  it("returns 404 for unknown or expired CLI auth state on poll", async () => {
+  it("treats unregistered state as pending and returns 404 for expired state on poll", async () => {
     const localEnv = testEnv();
+    // ブラウザが /auth/cli を開く前にCLIが問い合わせても、待機中として扱う
     const unknownState = "h".repeat(32) + "unknown";
 
     const unknownResponse = await app.fetch(new Request(`http://localhost/auth/cli/poll?state=${unknownState}`), localEnv);
-    expect(unknownResponse.status).toBe(404);
-    await expect(unknownResponse.json()).resolves.toEqual({ error: "not_found" });
+    expect(unknownResponse.status).toBe(202);
+    await expect(unknownResponse.json()).resolves.toEqual({ status: "pending" });
 
     const expiredState = "i".repeat(32) + "expired-poll";
     const now = Math.floor(Date.now() / 1000);
@@ -220,8 +208,6 @@ describe("CLI Auth Flow", () => {
       localEnv
     );
     expect(callbackResponse.status).toBe(200);
-    expect((await app.fetch(new Request(`http://localhost/auth/cli/poll?state=${state}`), localEnv)).status).toBe(202);
-    expect((await confirm(localEnv, cookie, state, callbackResponse)).status).toBe(200);
 
     const pollResponse = await app.fetch(new Request(`http://localhost/auth/cli/poll?state=${state}`), localEnv);
     expect(pollResponse.status).toBe(200);
@@ -240,22 +226,16 @@ describe("CLI Auth Flow", () => {
     expect(whoami.user.email).toBe(user.email);
   });
 
-  it("binds confirmation to the original session and issues at most one key", async () => {
+  it("issues at most one key per CLI auth state", async () => {
     const localEnv = testEnv();
     const cookie = await authCookie(localEnv);
-    const otherSession = await createSession(localEnv, user);
-    const otherUserCookie = await authCookie(localEnv, editorUser);
-    const state = "confirmation-state-" + "k".repeat(32);
+    const state = "single-key-state-" + "k".repeat(32);
     await app.fetch(new Request(`http://localhost/auth/cli?state=${state}`), localEnv);
-    const callback = await app.fetch(new Request(`http://localhost/auth/cli/callback?cli_state=${state}`, { headers: { Cookie: cookie } }), localEnv);
-    const html = await callback.text();
-    expect((await confirm(localEnv, otherSession, state, new Response(html))).status).toBe(410);
-    expect((await confirm(localEnv, otherUserCookie, state, new Response(html))).status).toBe(410);
-    expect(await localEnv.DB.prepare("SELECT count(*) AS count FROM api_keys").first()).toEqual({ count: 0 });
-    const results = await Promise.all([confirm(localEnv, cookie, state, new Response(html)), confirm(localEnv, cookie, state, new Response(html))]);
+    const callback = () => app.fetch(new Request(`http://localhost/auth/cli/callback?cli_state=${state}`, { headers: { Cookie: cookie } }), localEnv);
+    const results = await Promise.all([callback(), callback()]);
     expect(results.map(response => response.status).sort()).toEqual([200, 410]);
     expect(await localEnv.DB.prepare("SELECT count(*) AS count FROM api_keys").first()).toEqual({ count: 1 });
-    const audit = await localEnv.DB.prepare("SELECT actor_id, auth_method FROM security_events WHERE route = '/auth/cli/confirm' AND status = 200").first();
+    const audit = await localEnv.DB.prepare("SELECT actor_id, auth_method FROM security_events WHERE route = '/auth/cli/callback' AND status = 200").first();
     expect(audit).toEqual({ actor_id: user.id, auth_method: "session" });
   });
 
