@@ -3,7 +3,8 @@ import type { AppBindings } from "../env";
 import { randomId } from "../lib/id";
 
 export const securityAudit: MiddlewareHandler<AppBindings> = async (c, next) => {
-  const pathname = new URL(c.req.url).pathname;
+  // ルーターと同じ復号済みのパスで判定する。未復号のURLでは符号化したパスが記録から漏れる
+  const pathname = c.req.path;
   const auditable = pathname.startsWith("/api/") || pathname.startsWith("/auth/cli");
   if (auditable || pathname.startsWith("/auth/")) c.header("Cache-Control", "no-store");
   await next();

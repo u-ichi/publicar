@@ -53,6 +53,19 @@ describe("API key route coverage", () => {
     }
   });
 
+  it("rejects cross-origin writes and records audit events on percent-encoded paths", async () => {
+    const env = testEnv();
+    const cookie = await createSession(env, user);
+    const response = await app.fetch(new Request("http://localhost/%61pi/v1/api-keys", {
+      method: "POST", headers: { Cookie: cookie, Origin: "https://content.example", "Sec-Fetch-Site": "same-site", "Content-Type": "text/plain" }, body: JSON.stringify({ name: "csrf" })
+    }), env);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "cross_origin_request_denied" });
+    expect(await env.DB.prepare("SELECT count(*) AS n FROM api_keys").first()).toEqual({ n: 0 });
+    const log = await env.DB.prepare("SELECT route, status FROM security_events ORDER BY created_at DESC LIMIT 1").first();
+    expect(log).toEqual({ route: "/api/v1/api-keys", status: 403 });
+  });
+
   // ルーターは復号したパスで処理先を決めるため、符号化したパスでも同じ制限がかかることを確かめる
   it("keeps session-only and recent-login restrictions on percent-encoded paths", async () => {
     const env = testEnv();
