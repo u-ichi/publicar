@@ -8,6 +8,8 @@ export const apiKeyPermissions = [
   { method: "GET", path: /^\/api\/v1\/api-keys$/, scope: "read" },
   { method: "DELETE", path: /^\/api\/v1\/api-keys\/[^/]+$/, scope: "write" },
   { method: "GET", path: /^\/api\/v1\/projects$/, scope: "read" },
+  // CLIから新しい記事をデプロイする時にプロジェクトを作る。公開範囲の変更やメンバー管理は許可しない
+  { method: "POST", path: /^\/api\/v1\/projects$/, scope: "deploy" },
   { method: "GET", path: /^\/api\/v1\/projects\/[^/]+$/, scope: "read" },
   { method: "GET", path: /^\/api\/v1\/projects\/[^/]+\/(files|comments|comment-threads|review-content)$/, scope: "read" },
   { method: "POST", path: /^\/api\/v1\/projects\/[^/]+\/deploy$/, scope: "deploy" },

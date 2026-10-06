@@ -90,7 +90,8 @@ app.use("/api/*", requireGuestAllowlist);
 app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const managesKeys = /^\/api\/v1\/api-keys(?:\/|$)/.test(path) && (c.req.method === "POST" || c.get("authMethod") === "session");
-  const managesProject = c.req.method !== "GET" && /^\/api\/v1\/projects(?:\/[^/]+(?:\/(?:members|access)(?:\/[^/]+)?)?)?\/?$/.test(path);
+  const createsProjectWithKey = c.req.method === "POST" && /^\/api\/v1\/projects\/?$/.test(path) && c.get("authMethod") === "api-key";
+  const managesProject = c.req.method !== "GET" && !createsProjectWithKey && /^\/api\/v1\/projects(?:\/[^/]+(?:\/(?:members|access)(?:\/[^/]+)?)?)?\/?$/.test(path);
   if (managesKeys || managesProject) return requireRecentSession(c, next);
   return next();
 });
