@@ -1,45 +1,29 @@
 {
   "schema_version": "1.0",
-  "renderer_version": "0.1.0",
-  "generated_at": "2026-06-16T15:51:33.044690+00:00",
+  "renderer_version": "1.9.0",
+  "generated_at": "2026-10-06T16:03:26.991121+00:00",
   "input": {
     "path": "docs/design/document-model.json",
-    "sha256": "97840b40418bc43fa6772358206b11eaa4444059c6c18f72621de6db9a35daaf"
+    "sha256": "1639109c2c82b6c4df4ce0f851acff567d02fb7067d044f1f30691629ab5ea52"
   },
   "document": {
-    "id": "publicar-redesign-v1",
-    "title": "publicar 再設計: SSSS 相当の OSS AI レポート共有基盤"
+    "id": "publicar-current-design-2026-10-07",
+    "title": "publicar の設計（2026年10月時点の実装）"
   },
   "outputs": {
     "index": "index.html",
     "assets": [
       "assets/style.css",
-      "assets/review-comments.js"
+      "assets/publish-overrides.css",
+      "assets/publish-export.js",
+      "assets/review-comments.js",
+      "assets/task-checklist.js",
+      "assets/interactive-state.js"
     ],
-    "diagrams": [
-      "assets/diagrams/architecture-diagram.mmd",
-      "assets/diagrams/data-model-relationships.mmd",
-      "assets/diagrams/auth-oauth-flow.mmd"
-    ],
+    "diagrams": [],
     "images": []
   },
-  "diagrams": [
-    {
-      "block_id": "architecture-diagram",
-      "kind": "flow",
-      "source": "assets/diagrams/architecture-diagram.mmd"
-    },
-    {
-      "block_id": "data-model-relationships",
-      "kind": "architecture",
-      "source": "assets/diagrams/data-model-relationships.mmd"
-    },
-    {
-      "block_id": "auth-oauth-flow",
-      "kind": "flow",
-      "source": "assets/diagrams/auth-oauth-flow.mmd"
-    }
-  ],
+  "diagrams": [],
   "review_blocks": [
     {
       "id": "document-header",
@@ -47,218 +31,97 @@
       "review_required": false
     },
     {
-      "id": "overview",
+      "id": "summary",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "glossary",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "architecture",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "architecture-actors",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "repositories",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "authentication",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "login-rules",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "authorization",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "drive-member-sync",
+      "type": "html",
+      "review_required": true
+    },
+    {
+      "id": "drive-member-unverified",
       "type": "callout",
       "review_required": false
     },
     {
-      "id": "goals",
+      "id": "storage",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "design-decisions",
+      "id": "upload",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "architecture-diagram",
-      "type": "diagram",
-      "review_required": true,
-      "diagram_kind": "flow",
-      "diagram_source": "assets/diagrams/architecture-diagram.mmd"
-    },
-    {
-      "id": "data-flow-upload",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "data-flow-serve",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "data-model-overview",
+      "id": "comments",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "data-model-entities",
+      "id": "audit",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "data-model-relationships",
-      "type": "diagram",
-      "review_required": false,
-      "diagram_kind": "architecture",
-      "diagram_source": "assets/diagrams/data-model-relationships.mmd"
-    },
-    {
-      "id": "data-model-deploy",
+      "id": "data-model",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "d1-schema",
+      "id": "api",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "d1-schema-sql",
+      "id": "screens",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "auth-oauth-flow",
-      "type": "diagram",
-      "review_required": true,
-      "diagram_kind": "flow",
-      "diagram_source": "assets/diagrams/auth-oauth-flow.mmd"
-    },
-    {
-      "id": "auth-api-key",
+      "id": "development",
       "type": "html",
       "review_required": true
     },
     {
-      "id": "auth-middleware",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "auth-security",
-      "type": "callout",
-      "review_required": true
-    },
-    {
-      "id": "api-deploy",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "api-projects",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "api-keys-ai",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "owner-model",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "visibility-model",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "file-structure",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "migration-plan",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "dev-environment",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "phase-1",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "phase-2",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "phase-3",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "phase-4",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "oss-setup",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "env-vars",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "verification",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "final-e2e",
-      "type": "callout",
-      "review_required": false
-    },
-    {
-      "id": "gui-design-overview",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "gui-screens",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "gui-login",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "gui-dashboard",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "gui-project-detail",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "gui-api-keys",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "gui-content-serve",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "gui-components",
-      "type": "html",
-      "review_required": false
-    },
-    {
-      "id": "review-points",
-      "type": "html",
-      "review_required": true
-    },
-    {
-      "id": "gui-claude-design-prompt",
+      "id": "documents",
       "type": "html",
       "review_required": false
     }

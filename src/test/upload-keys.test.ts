@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import app from "../index";
 import { createProject, updateProject } from "../db/projects";
-import { authCookie, resetDatabase, testEnv, user, editorUser, jsonResponse, mockDriveUploads } from "./helpers";
+import { authCookie, resetDatabase, testEnv, user, editorUser, guestUser, jsonResponse, mockDriveUploads } from "./helpers";
 import { upsertProjectFile } from "../db/project-files";
 import { serviceEnv, mockServiceDrive, SERVICE_EMAIL } from "./service-account-helpers";
 
@@ -49,18 +49,20 @@ describe("project upload keys", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("only lets the owner issue and revoke keys, and never lists the secret or its hash", async () => {
+  it("lets organization members issue and revoke keys, rejects guests, and never lists the secret or its hash", async () => {
     const env = await serviceEnv();
     const cookie = await authCookie(env);
-    const otherCookie = await authCookie(env, editorUser);
+    const guestCookie = await authCookie(env, guestUser);
+    const otherMemberCookie = await authCookie(env, editorUser);
     const project = await createProject(env, user, { title: "Auto", alias: "auto", visibility: "private" });
     await updateProject(env, project.id, { driveFolderId: "folder_auto" });
     mockServiceDrive();
     const url = `http://localhost/api/v1/projects/${project.id}/upload-keys`;
     const issue = (Cookie: string) => app.fetch(new Request(url, { method: "POST", headers: { Cookie, "Content-Type": "application/json", Origin: "http://localhost" },
       body: JSON.stringify({ name: "Actions", expires_at: new Date(Date.now() + 86400000).toISOString() }) }), env);
-    expect((await issue(otherCookie)).status).toBe(403);
-    const issued = await issue(cookie);
+    expect((await issue(guestCookie)).status).toBe(403);
+    // 作成者以外の組織の利用者も発行できる
+    const issued = await issue(otherMemberCookie);
     expect(issued.status).toBe(201);
     const { key, raw_key } = await issued.json<{ key: { id: string }; raw_key: string }>();
     expect(raw_key).toMatch(/^upl_[A-Za-z0-9_-]{43}$/);

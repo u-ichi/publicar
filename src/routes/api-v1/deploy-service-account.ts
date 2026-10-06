@@ -88,7 +88,7 @@ export async function deployServiceAccount(c: Context<AppBindings>): Promise<Res
       { ok: true, file: manifest.get(path), entry: entryPath, url: projectUrl(c.req.raw, project.alias), revision_id: revisionId };
     // この更新とファイル一覧・履歴を同じD1トランザクションで確定する。Google/R2呼出しを含めない。
     const authorization = key ? `EXISTS (SELECT 1 FROM upload_keys WHERE id = ? AND project_id = projects.id AND revoked_at IS NULL AND julianday(expires_at) > julianday('now'))` :
-      `EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = projects.id AND pm.user_id = ? AND pm.role IN ('owner', 'editor') AND u.disabled_at IS NULL)`;
+      `EXISTS (SELECT 1 FROM project_roles r WHERE r.project_id = projects.id AND r.user_id = ? AND r.role IN ('owner', 'editor'))`;
     const apiKeyCheck = c.get("apiKeyId") ? `AND EXISTS (SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')))` : "";
     const publish = c.env.DB.prepare(`UPDATE projects SET active_revision_id = ?, entry_path = ?, updated_at = datetime('now')
       WHERE id = ? AND active_revision_id IS ? AND storage_service_account = ? AND drive_folder_id = ?

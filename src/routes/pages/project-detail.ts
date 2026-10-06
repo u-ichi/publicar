@@ -3,13 +3,12 @@ import { listProjectFilesWithDeployers, type ProjectFileWithDeployer } from "../
 import {
   getProjectForUser,
   listProjectAccess,
-  listProjectMembers,
   type Project,
   type ProjectAccess
 } from "../../db/projects";
 import type { AppBindings, AuthUser } from "../../env";
 import type { Context } from "hono";
-import { driveFolderUrl, escapeHtml, formatBytes, page, roleBadge, shell, userIdentityHtml, visibilityBadge } from "./layout";
+import { driveFolderUrl, escapeHtml, formatBytes, page, roleBadge, shell, userIdentityHtml, visibilityBadge, visibilityOptions } from "./layout";
 
 function safeJsonForScript(value: unknown): string {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
@@ -42,19 +41,6 @@ function deployHistoryRows(deployEvents: DeployEventWithDeployer[]): string {
   <td>${userIdentityHtml({ name: event.name, email: event.email, avatarUrl: event.avatarUrl })}</td>
   <td class="right mono">${escapeHtml(formatBytes(event.totalSizeBytes))}</td>
   <td class="right mono">${escapeHtml(event.deployedAt)}</td>
-</tr>`
-    )
-    .join("");
-}
-
-function memberRows(members: Awaited<ReturnType<typeof listProjectMembers>>): string {
-  return members
-    .map(
-      (member) => `<tr data-member-user-id="${escapeHtml(member.userId)}">
-  <td>${userIdentityHtml(member)}</td>
-  <td>${member.role === "owner" ? roleBadge("owner") : `<select class="member-role" aria-label="role for ${escapeHtml(member.email)}"><option value="editor" selected>editor</option></select>`}</td>
-  <td class="mono">${escapeHtml(member.createdAt)}</td>
-  <td class="right">${member.role === "owner" ? "" : `<button class="button secondary remove-member" type="button">削除</button>`}</td>
 </tr>`
     )
     .join("");
@@ -103,7 +89,7 @@ function externalAccessSection(project: Project, accessList: ProjectAccess[]): s
   }
   return `<div class="stack" style="margin-top:24px">
     <h2>外部コラボレーター招待</h2>
-    <p class="subtle">現在の visibility (${escapeHtml(project.visibility)}) の設定に加えて、ここに追加したメールアドレスの Google アカウントがこの project を閲覧・コメントできます。組織ドメイン外のアドレスも指定できます。Drive フォルダがある場合、選択した権限で共有も連動します (通知メールは送りません)。</p>
+    <p class="subtle">共有ドライブのメンバーに加えて、ここに追加したメールアドレスの Google アカウントがこの project を閲覧・コメントできます。組織ドメイン外のアドレスも指定できます。Drive フォルダがある場合、選択した権限で共有も連動します (通知メールは送りません)。</p>
     <form id="access-form" class="row">
       <label>メールアドレス<input name="email" type="email" required placeholder="guest@example.com"></label>
       <label>Drive 権限
@@ -123,7 +109,6 @@ function externalAccessSection(project: Project, accessList: ProjectAccess[]): s
 function projectDetailPage(
   user: AuthUser,
   project: Project,
-  members: Awaited<ReturnType<typeof listProjectMembers>>,
   files: ProjectFileWithDeployer[],
   deployEvents: DeployEventWithDeployer[],
   accessList: ProjectAccess[]
@@ -157,7 +142,7 @@ function projectDetailPage(
   <button class="tab" type="button" role="tab" aria-selected="true" data-tab="files">ファイル</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="settings">設定</button>
   ${project.role === "owner" ? '<button class="tab" type="button" role="tab" aria-selected="false" data-tab="uploads">自動アップロード</button>' : ""}
-  <button class="tab" type="button" role="tab" aria-selected="false" data-tab="members">メンバー</button>
+  <button class="tab" type="button" role="tab" aria-selected="false" data-tab="members">社外の招待</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="history">デプロイ履歴</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="comments">コメント履歴</button>
   <button class="tab" type="button" role="tab" aria-selected="false" data-tab="access">アクセス履歴</button>
@@ -181,10 +166,7 @@ function projectDetailPage(
     <label>Alias<input class="mono" name="alias" value="${escapeHtml(project.alias)}" data-original-alias="${escapeHtml(project.alias)}" required></label>
     <div class="full status" id="alias-warning"></div>
     <label>公開設定
-      <select name="visibility">
-        ${["private", "invite", "domain", "link", "public"].map((value) => `<option value="${value}"${project.visibility === value ? " selected" : ""}>${value}</option>`).join("")}
-        <option value="group" disabled>group 近日対応</option>
-      </select>
+      <select name="visibility">${visibilityOptions(project.visibility)}</select>
     </label>
     <label>カスタムドメイン<input placeholder="例: reports.example.com" disabled></label>
     <div class="full row"><button class="button" type="submit">保存</button><div id="settings-status" class="status" aria-live="polite"></div></div>
@@ -193,13 +175,6 @@ function projectDetailPage(
 </section>
 <section class="tab-panel" id="panel-members">
   <div class="panel stack">
-    <h2>メンバー</h2>
-    <form id="member-form" class="row">
-      <label>メールアドレス<input name="email" type="email" required></label>
-      <button class="button" type="submit">追加</button>
-      <div id="member-status" class="status" aria-live="polite"></div>
-    </form>
-    <table><thead><tr><th>メンバー</th><th>ロール</th><th>追加日</th><th></th></tr></thead><tbody>${memberRows(members)}</tbody></table>
     ${externalAccessSection(project, accessList)}
   </div>
 </section>
@@ -382,28 +357,6 @@ qs("#settings-form")?.addEventListener("submit", async (event) => {
   if (!response.ok) { setStatus(status, errorText(payload, "Save failed"), "error"); return; }
   location.href = "/projects/" + encodeURIComponent(projectId);
 });
-qs("#member-form")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const status = qs("#member-status");
-  const data = new FormData(event.currentTarget);
-  setStatus(status, "Adding...");
-  const response = await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: String(data.get("email") || ""), role: "editor" }) });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) { setStatus(status, errorText(payload, "Add failed"), "error"); return; }
-  reloadToTab("members");
-});
-qsa(".member-role").forEach((select) => select.addEventListener("change", async () => {
-  const row = select.closest("[data-member-user-id]");
-  if (!row) return;
-  await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/members/" + encodeURIComponent(row.dataset.memberUserId), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: select.value }) });
-  reloadToTab("members");
-}));
-qsa(".remove-member").forEach((button) => button.addEventListener("click", async () => {
-  const row = button.closest("[data-member-user-id]");
-  if (!row) return;
-  await fetch("/api/v1/projects/" + encodeURIComponent(projectId) + "/members/" + encodeURIComponent(row.dataset.memberUserId), { method: "DELETE" });
-  reloadToTab("members");
-}));
 qs("#access-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const status = qs("#access-status");
@@ -671,11 +624,10 @@ export async function projectDetail(c: Context<AppBindings>): Promise<Response> 
   if (!project) {
     return c.notFound();
   }
-  const [members, files, deployEvents, accessList] = await Promise.all([
-    listProjectMembers(c.env, project.id),
+  const [files, deployEvents, accessList] = await Promise.all([
     listProjectFilesWithDeployers(c.env, project.id),
     listDeployEventsWithDeployers(c.env, project.id),
     project.role === "owner" ? listProjectAccess(c.env, project.id) : Promise.resolve([])
   ]);
-  return c.html(page(`${project.title} - publicar`, projectDetailPage(user, project, members, files, deployEvents, accessList)));
+  return c.html(page(`${project.title} - publicar`, projectDetailPage(user, project, files, deployEvents, accessList)));
 }

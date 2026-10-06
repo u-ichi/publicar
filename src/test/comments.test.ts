@@ -5,7 +5,7 @@ import { upsertProjectFile } from "../db/project-files";
 import { createProject, updateProject, upsertProjectMember } from "../db/projects";
 import app from "../index";
 import { getValidAccessToken } from "../lib/token-refresh";
-import { authCookie, avatarUser, editorUser, jsonResponse, mockDriveUploads, resetDatabase, seedUser, testEnv, user, type Env } from "./helpers";
+import { authCookie, avatarUser, editorUser, guestUser, jsonResponse, mockDriveUploads, resetDatabase, seedUser, testEnv, user, type Env } from "./helpers";
 
 describe("CLI Auth Flow", () => {
   beforeEach(async () => {
@@ -265,13 +265,21 @@ describe("CLI Auth Flow", () => {
     const openList = (await openResponse.json()) as { threads: Array<{ id: string }> };
     expect(openList.threads.map((thread) => thread.id)).toEqual([latestId]);
 
-    const nonMemberResponse = await app.fetch(
+    // 組織の利用者は共有ドライブと同じく全プロジェクトを見られる。招待のない社外の利用者は見られない
+    const otherMemberResponse = await app.fetch(
       new Request(`http://localhost/api/v1/projects/${project.id}/comment-threads`, {
         headers: { Cookie: await authCookie(localEnv, { ...editorUser, id: "user_nonmember", googleId: "google_nonmember", email: "nonmember@example.com" }) }
       }),
       localEnv
     );
-    expect(nonMemberResponse.status).toBe(404);
+    expect(otherMemberResponse.status).toBe(200);
+    const guestResponse = await app.fetch(
+      new Request(`http://localhost/api/v1/projects/${project.id}/comment-threads`, {
+        headers: { Cookie: await authCookie(localEnv, guestUser) }
+      }),
+      localEnv
+    );
+    expect(guestResponse.status).toBe(404);
   });
 
   it("serves authenticated review content from cached HTML without changing public HTML headers", async () => {

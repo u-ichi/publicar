@@ -38,7 +38,7 @@ export async function verifyServiceAccountLocation(env: Env, token: string, fold
 type Preparation = ProjectStorage & { alias: string; storage_transition_id: string; storage_transition_until: number;
   storage_preparation_folder_id: string | null; storage_preparation_source_folder_id: string | null;
   storage_preparation_account: string; storage_preparation_after_id: string | null };
-const ownerCheck = "EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = projects.id AND pm.user_id = ? AND pm.role = 'owner' AND u.disabled_at IS NULL)";
+const ownerCheck = "EXISTS (SELECT 1 FROM project_roles r WHERE r.project_id = projects.id AND r.user_id = ? AND r.role = 'owner')";
 const preparationColumns = "storage_transition_id = NULL, storage_transition_until = NULL, storage_preparation_folder_id = NULL, storage_preparation_source_folder_id = NULL, storage_preparation_account = NULL, storage_preparation_after_id = NULL";
 
 export async function enableServiceAccountStorage(env: Env, projectId: string, ownerId: string): Promise<ProjectStorage | null> {

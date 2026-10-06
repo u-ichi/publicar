@@ -51,6 +51,8 @@ OAuth の「対象」は **「外部 / 本番環境」** を選ぶ (社外コラ
    `https://drive.google.com/drive/folders/<DRIVE_ID>`
 3. publicar を利用するユーザーに Shared Drive への書き込み権限を付与
 
+publicar は Shared Drive のメンバー一覧を15分ごとに取り込み、閲覧と編集ができる人を決める。メンバー（Google グループで追加した場合はグループの中の人、ドメインで追加した場合はそのドメインの人）は全プロジェクトを閲覧と編集でき、それ以外の人は招待されたプロジェクトだけを閲覧できる。取り込みはサービスアカウントで行い、Google グループの展開には Cloud Identity Groups API を使う。一度も取り込みに成功していない間は、組織のアカウント全員を許可する。取り込みに失敗した時は前回の一覧を使い続ける。取り込みの状態は、組織のアカウントでログインして `GET /api/v1/drive-members/status` で確認できる。
+
 ## 5. 設定ファイルの作成
 
 ### wrangler.toml

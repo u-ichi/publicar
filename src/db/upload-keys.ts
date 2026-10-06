@@ -10,8 +10,8 @@ export const uploadKeyColumns = "id, project_id, name, created_by, expires_at, r
 export async function createUploadKey(env: Env, input: { projectId: string; name: string; createdBy: string; expiresAt: string }) {
   const rawKey = UPLOAD_KEY_PREFIX + randomBase64Url(32);
   const key = await env.DB.prepare(`INSERT INTO upload_keys (id, project_id, name, key_hash, created_by, expires_at)
-    SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id = pm.user_id
-      WHERE pm.project_id = ? AND pm.user_id = ? AND pm.role = 'owner' AND u.disabled_at IS NULL)
+    SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM project_roles r
+      WHERE r.project_id = ? AND r.user_id = ? AND r.role = 'owner')
     RETURNING ${uploadKeyColumns}`)
     .bind(randomId("uk"), input.projectId, input.name, await sha256Base64Url(rawKey), input.createdBy, input.expiresAt, input.projectId, input.createdBy).first<UploadKey>();
   if (!key) throw new Error("project_owner_required");

@@ -11,7 +11,7 @@ export async function removeServiceAccountFile(env: Env, projectId: string, path
   const active = "EXISTS (SELECT 1 FROM projects WHERE id = ? AND active_revision_id = ?)";
   const result = await env.DB.batch([
     env.DB.prepare(`UPDATE projects SET active_revision_id = ?, updated_at = datetime('now') WHERE id = ? AND active_revision_id IS ?
-      AND EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = projects.id AND pm.user_id = ? AND pm.role IN ('owner', 'editor') AND u.disabled_at IS NULL)`)
+      AND EXISTS (SELECT 1 FROM project_roles r WHERE r.project_id = projects.id AND r.user_id = ? AND r.role IN ('owner', 'editor'))`)
       .bind(revision, projectId, storage.active_revision_id, userId),
     env.DB.prepare(`INSERT INTO upload_objects (id, project_id, revision_id, drive_folder_id, drive_file_id, r2_key, service_account, created_at)
       SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${active} ON CONFLICT(r2_key) DO NOTHING`)
@@ -25,7 +25,7 @@ export async function removeServiceAccountFile(env: Env, projectId: string, path
 export async function removeServiceAccountProject(env: Env, projectId: string, userId: string): Promise<void> {
   const storage = await getProjectStorage(env, projectId);
   if (!storage?.storage_service_account || !storage.drive_folder_id) throw new Error("project_storage_changed");
-  const authorized = "EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? AND pm.user_id = ? AND pm.role = 'owner' AND u.disabled_at IS NULL)";
+  const authorized = "EXISTS (SELECT 1 FROM project_roles r WHERE r.project_id = ? AND r.user_id = ? AND r.role = 'owner')";
   const results = await env.DB.batch([
     env.DB.prepare(`INSERT INTO upload_objects (id, project_id, revision_id, drive_folder_id, drive_file_id, r2_key, service_account, created_at)
       SELECT 'cleanup_' || id, project_id, ?, ?, drive_file_id, r2_key, ?, ? FROM project_files WHERE project_id = ? AND ${authorized}

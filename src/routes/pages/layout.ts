@@ -495,8 +495,26 @@ export function loginPage(domain: string): string {
   );
 }
 
+// 閲覧の可否は共有ドライブのメンバーで決まるため、画面で選べるのはメンバー・リンク・公開の3つだけにする。
+// 以前の private / invite / group はメンバーとして扱う。
+const VISIBILITY_CHOICES = [
+  { value: "domain", label: "共有ドライブのメンバー" },
+  { value: "link", label: "リンクを知っている人" },
+  { value: "public", label: "公開" }
+] as const;
+
+function visibilityChoice(visibility: string) {
+  return VISIBILITY_CHOICES.find((choice) => choice.value === visibility) ?? VISIBILITY_CHOICES[0];
+}
+
 export function visibilityBadge(visibility: string): string {
-  return `<span class="badge visibility-${escapeHtml(visibility)}">${escapeHtml(visibility)}</span>`;
+  const choice = visibilityChoice(visibility);
+  return `<span class="badge visibility-${choice.value}">${choice.label}</span>`;
+}
+
+export function visibilityOptions(visibility: string): string {
+  const current = visibilityChoice(visibility).value;
+  return VISIBILITY_CHOICES.map((choice) => `<option value="${choice.value}"${choice.value === current ? " selected" : ""}>${choice.label}</option>`).join("");
 }
 
 export function roleBadge(role: string): string {

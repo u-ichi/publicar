@@ -29,8 +29,8 @@ function principal(c: Context<AppBindings>) {
   const apiKeyId = c.get("apiKeyId");
   const sql = key ? `EXISTS (SELECT 1 FROM upload_keys k WHERE k.id = ? AND k.project_id = projects.id
     AND k.revoked_at IS NULL AND julianday(k.expires_at) > julianday('now'))` :
-    `EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = projects.id
-      AND pm.user_id = ? AND pm.role IN ('owner', 'editor') AND u.disabled_at IS NULL AND u.kind = 'member')`;
+    `EXISTS (SELECT 1 FROM project_roles r WHERE r.project_id = projects.id
+      AND r.user_id = ? AND r.role IN ('owner', 'editor'))`;
   const apiSql = apiKeyId ? ` AND EXISTS (SELECT 1 FROM api_keys k WHERE k.id = ? AND k.user_id = ? AND k.revoked_at IS NULL
     AND (k.expires_at IS NULL OR julianday(k.expires_at) > julianday('now')) AND k.automation_grant_id IS NULL
     AND (k.project_id IS NULL OR k.project_id = projects.id) AND EXISTS (SELECT 1 FROM json_each(k.scopes) WHERE value = 'deploy'))` : "";

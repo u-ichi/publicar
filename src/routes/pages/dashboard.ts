@@ -1,7 +1,8 @@
 import { listProjectsForUser, type Project } from "../../db/projects";
 import type { AppBindings, AuthUser } from "../../env";
 import type { Context } from "hono";
-import { escapeHtml, firstAllowedDomain, googleIcon, iconGrid, iconList, loginPage, page, roleBadge, shell, visibilityBadge } from "./layout";
+import { escapeHtml, firstAllowedDomain, googleIcon, iconGrid, iconList, loginPage, page, roleBadge, shell, visibilityBadge, visibilityOptions } from "./layout";
+import { isDriveMemberUser } from "../../storage/drive-members";
 
 function projectCard(project: Project): string {
   return `<article class="card project-card" data-project-title="${escapeHtml(project.title.toLowerCase())}" data-project-alias="${escapeHtml(project.alias.toLowerCase())}">
@@ -37,8 +38,9 @@ function projectListRows(projects: Project[]): string {
     .join("");
 }
 
-function dashboard(user: AuthUser, projects: Project[]): string {
-  const isGuest = user.kind === "guest";
+// プロジェクトを作れるのは共有ドライブのメンバーだけ（canCreate）
+function dashboard(user: AuthUser, projects: Project[], canCreate: boolean): string {
+  const isGuest = !canCreate;
   const createControls = isGuest
     ? ""
     : `<button class="button" type="button" data-open-modal="#new-project-dialog">+ 新規プロジェクト</button>`;
@@ -50,14 +52,7 @@ function dashboard(user: AuthUser, projects: Project[]): string {
     <label>プロジェクト名<input name="title" autocomplete="off" required></label>
     <label>Alias<input class="mono" name="alias" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,63}" placeholder="未入力なら自動生成"></label>
     <label>公開設定
-      <select name="visibility">
-        <option value="domain">domain</option>
-        <option value="private">private</option>
-        <option value="invite">invite</option>
-        <option value="link">link</option>
-        <option value="public">public</option>
-        <option value="group" disabled>group 近日対応</option>
-      </select>
+      <select name="visibility">${visibilityOptions("domain")}</select>
     </label>
     <div class="row"><button class="button" type="submit">作成</button><button class="button secondary" type="button" data-close-modal>キャンセル</button></div>
     <div id="create-status" class="status" aria-live="polite"></div>
@@ -128,6 +123,6 @@ export async function home(c: Context<AppBindings>): Promise<Response> {
     return c.html(loginPage(firstAllowedDomain(c)));
   }
   const projects = await listProjectsForUser(c.env, user.id);
-  return c.html(page("publicar", dashboard(user, projects)));
+  return c.html(page("publicar", dashboard(user, projects, await isDriveMemberUser(c.env, user.id))));
 }
 

@@ -11,7 +11,7 @@ HTML レポートを共有 URL で配信するセルフホスト型サービス�
 - **API キー認証** — `pub_...` 形式のキーで CLI / エージェントから操作
 - **AI エージェント連携** — `/llms.txt` + `/api/v1/openapi.json`
 - **AI コメントループ** — 公開 URL のコメントに対する AI 返信案と HTML 修正案を、別 repo の `publicar-skill` plugin から支援
-- **GUI 管理画面** — プロジェクト一覧・詳細・メンバー管理・ファイル管理
+- **GUI 管理画面** — プロジェクト一覧・詳細・社外の招待・ファイル管理
 
 ## クイックスタート
 
@@ -56,8 +56,11 @@ Google OAuth の設定は **[Google OAuth セットアップガイド](docs/goog
 | `GET` | `/api/v1/api-keys` | API キー一覧 |
 | `POST` | `/api/v1/api-keys` | API キー発行 |
 | `DELETE` | `/api/v1/api-keys/{id}` | API キー削除 |
+| `GET` | `/api/v1/drive-members/status` | 共有ドライブのメンバー一覧の取り込み状態 |
 | `GET` | `/auth/cli` | CLI 認証フロー開始 |
 | `GET` | `/auth/cli/poll` | CLI 認証ポーリング |
+
+API キーで呼ぶ時は `Authorization: Bearer pub_...` を付ける。全 API の一覧は `/api/v1/openapi.json` を参照。
 
 ## AI エージェント連携
 
