@@ -1,6 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import type { AppBindings } from "../../env";
-import { requireSession } from "../../middleware/session-security";
 import { serviceAccountConfigured } from "../../auth/service-account";
 import { expirationTime } from "../../db/api-keys";
 import { getProjectRole } from "../../db/projects";
@@ -26,7 +25,7 @@ uploadKeysRoute.get("/:id/upload-keys", async (c) => {
   return c.json({ keys: result.results });
 });
 
-uploadKeysRoute.post("/:id/upload-keys", requireSession, async (c) => {
+uploadKeysRoute.post("/:id/upload-keys", async (c) => {
   if (!serviceAccountConfigured(c.env)) return c.json({ error: "service_account_not_configured" }, 503);
   const body = await readJsonObject(c.req.raw);
   if (!body || typeof body.name !== "string" || !body.name.trim() || body.name.length > 100 ||

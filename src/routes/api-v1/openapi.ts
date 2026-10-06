@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { AppBindings } from "../../env";
-import { isSessionOnlyOperation } from "../../middleware/api-permissions";
+import { findLoginMethodRule } from "../../middleware/api-permissions";
 
 const SPEC = {
   openapi: "3.1.0",
@@ -377,7 +377,7 @@ const SPEC = {
 export function openapiSpec(c: Context<AppBindings>): Response {
   const paths = Object.fromEntries(Object.entries(SPEC.paths).map(([path, operations]) => [path,
     Object.fromEntries(Object.entries(operations).map(([method, operation]) => {
-      const sessionOnly = isSessionOnlyOperation(method.toUpperCase(), path.replace(/\{([^}]+)\}/g, ":$1"));
+      const sessionOnly = findLoginMethodRule(method.toUpperCase(), path.replace(/\{([^}]+)\}/g, ":$1"))?.sessionOnly ?? false;
       const uploads = path === "/api/v1/projects/{id}/deploy" && method === "post";
       const security = sessionOnly ? [{ sessionAuth: [] }] : [{ sessionAuth: [] }, { bearerAuth: [] }, ...(uploads ? [{ uploadKeyAuth: [] }] : [])];
       const detail = "description" in operation ? operation.description + " " : "";

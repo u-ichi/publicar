@@ -1,12 +1,13 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
 
-// ログイン方法（authMethod）による分岐は、認証のミドルウェアだけに置く。
+// ログイン方法（authMethod）による分岐は、api-permissions.ts の規則の表と適用処理だけに置く。
 // ルートの中で分岐すると、入力チェックより後ろの分岐は api-key-routes.test.ts の比較では見つからないため、ソースで止める。
 const sources = import.meta.glob(["../**/*.ts", "!../test/**", "!../**/*.test.ts"], { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 
 const allowedAuthMethodReaders = [
-  "../middleware/session-security.ts",
+  // ログイン方法で扱いを変える規則の表と、その適用
+  "../middleware/api-permissions.ts",
   // 監査記録に認証方法を残すだけで、許可・拒否には使わない
   "../middleware/security-audit.ts"
 ];

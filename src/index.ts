@@ -5,6 +5,7 @@ import { randomBase64Url } from "./lib/encoding";
 import { deleteOldAccessLogs } from "./db/access-logs";
 import type { AppBindings, Env } from "./env";
 import { requireAuth, requireGuestAllowlist, resolveAuth } from "./middleware/auth";
+import { enforceLoginMethodRules } from "./middleware/api-permissions";
 import { rejectCrossOriginMutation } from "./middleware/session-security";
 import { securityAudit } from "./middleware/security-audit";
 import { apiKeysRoute } from "./routes/api-v1/api-keys";
@@ -85,6 +86,7 @@ app.get("/api/v1/openapi.json", openapiSpec);
 app.use("*", resolveAuth);
 app.use("/api/*", requireAuth);
 app.use("/api/*", requireGuestAllowlist);
+app.use("*", enforceLoginMethodRules);
 
 app.get("/api/v1/whoami", (c) => {
   return c.json({ user: c.get("user") });

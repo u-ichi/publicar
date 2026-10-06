@@ -1,12 +1,11 @@
 import { Hono } from "hono";
 import { API_KEY_MAX_DAYS, createApiKey, deleteApiKey, expirationTime, listApiKeys } from "../../db/api-keys";
 import type { AppBindings } from "../../env";
-import { requireRecentSession, requireRecentSessionIfSession } from "../../middleware/session-security";
 import { readJsonObject } from "../../lib/request";
 
 export const apiKeysRoute = new Hono<AppBindings>();
 
-apiKeysRoute.post("/", requireRecentSession, async (c) => {
+apiKeysRoute.post("/", async (c) => {
   const body = await readJsonObject(c.req.raw);
   if (!body) {
     return c.json({ error: "invalid_json" }, 400);
@@ -32,11 +31,11 @@ apiKeysRoute.post("/", requireRecentSession, async (c) => {
   return c.json({ ok: true, api_key: apiKey, raw_key: rawKey }, 201);
 });
 
-apiKeysRoute.get("/", requireRecentSessionIfSession, async (c) => {
+apiKeysRoute.get("/", async (c) => {
   return c.json({ api_keys: await listApiKeys(c.env, c.get("user").id) });
 });
 
-apiKeysRoute.delete("/:id", requireRecentSessionIfSession, async (c) => {
+apiKeysRoute.delete("/:id", async (c) => {
   const deleted = await deleteApiKey(c.env, c.req.param("id"), c.get("user").id);
   if (!deleted) {
     return c.json({ error: "not_found" }, 404);
