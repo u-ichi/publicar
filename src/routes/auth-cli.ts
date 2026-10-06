@@ -1,17 +1,19 @@
 import { Hono } from "hono";
 import { getActiveSessionUser, getStoredSession, sessionReference } from "../auth/session";
-import { createApiKey, deleteApiKey, validateScopes } from "../db/api-keys";
+import { createApiKey, deleteApiKey } from "../db/api-keys";
 import {
   completeCliAuthState,
   consumeCliAuthState,
   findCliAuthState,
   insertCliAuthState
 } from "../db/cli-auth";
-import { canEditProject, getProjectRole, listProjectsForUser } from "../db/projects";
 import { randomBase64Url } from "../lib/encoding";
 import { sha256Base64Url } from "../lib/crypto";
 import { escapeHtml } from "./pages/layout";
 import type { AppBindings } from "../env";
+
+// CLIへ渡すキーは全scope・プロジェクト限定なしで発行し、期限だけを固定する
+const CLI_KEY_DAYS = 365;
 
 export const cliAuthRoute = new Hono<AppBindings>();
 
@@ -56,18 +58,15 @@ cliAuthRoute.get("/cli/callback", async (c) => {
     WHERE state = ? AND status = 'pending' AND expires_at > ? AND (consent_user_id IS NULL OR consent_user_id = ?)`)
     .bind(user.id, sessionKey, await sha256Base64Url(confirmation), cliState, Math.floor(Date.now() / 1000), user.id).run();
   if (!bound.meta.changes) return c.json({ error: "cli_state_bound_to_another_user" }, 403);
-  const projects = await listProjectsForUser(c.env, user.id);
   c.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   c.header("Referrer-Policy", "no-referrer");
-  return c.html(`<!doctype html><html lang="ja"><meta charset="utf-8"><title>CLIへの権限付与</title><style>body{font:16px/1.6 system-ui;margin:40px auto;padding:0 20px;max-width:640px;color:#17202a}label{display:block;margin:18px 0}input:not([type=checkbox]),select{display:block;box-sizing:border-box;width:100%;padding:10px;font:inherit}button{padding:10px 20px;background:#175cd3;color:white;border:0;border-radius:6px;font:inherit}a{margin-left:20px}</style>
+  return c.html(`<!doctype html><html lang="ja"><meta charset="utf-8"><title>CLIへの権限付与</title><style>body{font:16px/1.6 system-ui;margin:40px auto;padding:0 20px;max-width:640px;color:#17202a}label{display:block;margin:18px 0}input:not([type=checkbox]){display:block;box-sizing:border-box;width:100%;padding:10px;font:inherit}button{padding:10px 20px;background:#175cd3;color:white;border:0;border-radius:6px;font:inherit}a{margin-left:20px}</style>
     <body><main><h1>CLIへの権限付与</h1><p>自分がこの端末で開始した認証だけを承認してください。他の人から届いたリンクなら閉じてください。</p>
     <p>ログイン中: ${escapeHtml(user.email)}</p><p>認証要求の末尾: ${escapeHtml(cliState.slice(-8))}</p>
     <form method="post" action="/auth/cli/confirm">
       <input type="hidden" name="state" value="${escapeHtml(cliState)}"><input type="hidden" name="confirmation" value="${confirmation}">
       <label>端末の名前 <input name="device_name" required maxlength="100" placeholder="例: 自分のMac"></label>
-      <label>公開先 <select name="project_id"><option value="">アカウント情報と閲覧権限のあるプロジェクトの読み取り</option>${projects.map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.title)}</option>`).join("")}</select></label>
-      <label>権限 <select name="scope"><option value="read">読み取り</option><option value="write">コメント・ファイル削除</option><option value="deploy">配信ファイルの更新</option></select></label>
-      <label>有効期間 <select name="days"><option value="1">1日</option><option value="7">7日</option><option value="30">30日</option></select></label>
+      <p>この端末のCLIに、閲覧・編集できるプロジェクトの読み取り、コメント、配信ファイルの更新を許可します。有効期間は${CLI_KEY_DAYS}日です。</p>
       <label><input type="checkbox" name="approved" value="yes" required>自分で開始した認証で、上記の権限をこの端末へ渡します</label>
       <button type="submit">権限を付与する</button><a href="/">取り消す</a>
     </form></main></body></html>`);
@@ -85,21 +84,14 @@ cliAuthRoute.post("/cli/confirm", async (c) => {
   const state = form.get("state");
   const confirmation = form.get("confirmation");
   const name = form.get("device_name");
-  const projectId = form.get("project_id");
-  const scopes = validateScopes([form.get("scope")]);
-  const days = Number(form.get("days"));
   if (typeof state !== "string" || typeof confirmation !== "string" || typeof name !== "string" || !name.trim() || name.length > 100 ||
-      typeof projectId !== "string" || !scopes || ![1, 7, 30].includes(days) || form.get("approved") !== "yes") return c.json({ error: "invalid_confirmation" }, 400);
-  if (projectId) {
-    const role = await getProjectRole(c.env, projectId, user.id);
-    if (!role || (scopes[0] !== "read" && !canEditProject(role))) return c.json({ error: "forbidden" }, 403);
-  } else if (scopes[0] !== "read") return c.json({ error: "project_id_required" }, 400);
+      form.get("approved") !== "yes") return c.json({ error: "invalid_confirmation" }, 400);
   const claimed = await c.env.DB.prepare(`UPDATE cli_auth_states SET status = 'authorizing'
     WHERE state = ? AND status = 'pending' AND expires_at > ? AND consent_user_id = ? AND consent_session_key = ? AND consent_token_hash = ?`)
     .bind(state, Math.floor(Date.now() / 1000), user.id, await sessionReference(c.req.raw, c.env), await sha256Base64Url(confirmation)).run();
   if (!claimed.meta.changes) return c.json({ error: "invalid_or_expired_confirmation" }, 410);
-  const { rawKey, apiKey } = await createApiKey(c.env, user.id, { name: `CLI (${name.trim()})`, scopes,
-    projectId: projectId || null, expiresAt: new Date(Date.now() + days * 86400000).toISOString() });
+  const { rawKey, apiKey } = await createApiKey(c.env, user.id, { name: `CLI (${name.trim()})`, scopes: ["read", "write", "deploy"],
+    projectId: null, expiresAt: new Date(Date.now() + CLI_KEY_DAYS * 86400000).toISOString() });
   c.set("apiKeyId", apiKey.id);
   try {
     if (!(await completeCliAuthState(c.env, state, rawKey, apiKey.id))) {
