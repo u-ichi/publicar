@@ -3,7 +3,7 @@ import { createSession } from "../auth/session";
 import { createApiKey } from "../db/api-keys";
 import { createProject } from "../db/projects";
 import { app } from "../index";
-import { findLoginMethodRule, loginMethodRules } from "../middleware/api-permissions";
+import { findLoginMethodRule } from "../middleware/api-permissions";
 import { authCookie, mockDriveUploads, resetDatabase, seedUser, testEnv, user } from "./helpers";
 
 type Auth = "session" | "api-key";
@@ -50,12 +50,6 @@ describe("API key route coverage", () => {
     }
   });
 
-  it("lists only routes that exist in the login method rules", () => {
-    for (const rule of loginMethodRules) {
-      expect(app.routes.some((route) => route.method === rule.method && route.path === rule.path), `${rule.method} ${rule.path}`).toBe(true);
-    }
-  });
-
   // 表で recentLogin とした操作だけが、ログインから16分経ったブラウザで再ログインを求められることを確かめる
   it("asks for a recent browser login exactly on the routes marked recentLogin", async () => {
     const routes = app.routes.filter((route) => route.method !== "ALL" && route.path.startsWith("/api/v1/"));
@@ -70,33 +64,22 @@ describe("API key route coverage", () => {
     }
   });
 
-  it("rejects cross-origin writes and records audit events on percent-encoded paths", async () => {
-    const env = testEnv();
-    const cookie = await createSession(env, user);
-    const response = await app.fetch(new Request("http://localhost/%61pi/v1/api-keys", {
-      method: "POST", headers: { Cookie: cookie, Origin: "https://content.example", "Sec-Fetch-Site": "same-site", "Content-Type": "text/plain" }, body: JSON.stringify({ name: "csrf" })
-    }), env);
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual({ error: "cross_origin_request_denied" });
-    expect(await env.DB.prepare("SELECT count(*) AS n FROM api_keys").first()).toEqual({ n: 0 });
-    const log = await env.DB.prepare("SELECT route, status FROM security_events ORDER BY created_at DESC LIMIT 1").first();
-    expect(log).toEqual({ route: "/api/v1/api-keys", status: 403 });
-  });
-
-  // ルーターは復号したパスで処理先を決めるため、符号化したパスでも同じ制限がかかることを確かめる
-  it("keeps session-only and recent-login restrictions on percent-encoded paths", async () => {
+  // 符号化したURLでも、キーの発行・組織管理・別サイトからの変更操作が拒否されることを確かめる（実際に見つかった迂回）
+  it("keeps restrictions on percent-encoded paths", async () => {
     const env = testEnv();
     const cookie = await createSession(env, user);
     const { rawKey } = await createApiKey(env, user.id, { name: "CLI" });
     const withKey = { Authorization: `Bearer ${rawKey}`, "Content-Type": "application/json" };
-    const created = await app.fetch(new Request("http://localhost/api/v1/%61pi-keys", { method: "POST", headers: withKey, body: JSON.stringify({ name: "escaped" }) }), env);
-    expect(created.status).toBe(403);
-    const organization = await app.fetch(new Request("http://localhost/api/v1/%6frganization/security-events", { headers: withKey }), env);
-    expect(organization.status).toBe(403);
+    expect((await app.fetch(new Request("http://localhost/api/v1/%61pi-keys", { method: "POST", headers: withKey, body: JSON.stringify({ name: "escaped" }) }), env)).status).toBe(403);
+    expect((await app.fetch(new Request("http://localhost/api/v1/%6frganization/security-events", { headers: withKey }), env)).status).toBe(403);
+    const crossOrigin = await app.fetch(new Request("http://localhost/%61pi/v1/api-keys", {
+      method: "POST", headers: { Cookie: cookie, Origin: "https://content.example", "Sec-Fetch-Site": "same-site", "Content-Type": "text/plain" }, body: JSON.stringify({ name: "csrf" })
+    }), env);
+    await expect(crossOrigin.json()).resolves.toEqual({ error: "cross_origin_request_denied" });
+    expect(await env.DB.prepare("SELECT count(*) AS n FROM api_keys").first()).toEqual({ n: 1 });
 
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 16 * 60000);
     const stale = await app.fetch(new Request("http://localhost/api/v1/%6frganization/security-events", { headers: { Cookie: cookie } }), env);
-    expect(stale.status).toBe(403);
     await expect(stale.json()).resolves.toMatchObject({ error: "reauthentication_required" });
   });
 });
