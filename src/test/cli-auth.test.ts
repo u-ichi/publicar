@@ -19,7 +19,7 @@ describe("CLI Auth Flow", () => {
     const confirmation = html.match(/name="confirmation" value="([^"]+)"/)?.[1];
     expect(confirmation).toBeTruthy();
     return app.fetch(new Request("http://localhost/auth/cli/confirm", {
-      method: "POST", headers: { Cookie: cookie }, body: new URLSearchParams({ state, confirmation: confirmation!, device_name: "Test terminal", project_id: "", scope: "read", days: "1", approved: "yes" })
+      method: "POST", headers: { Cookie: cookie }, body: new URLSearchParams({ state, confirmation: confirmation!, device_name: "Test terminal", approved: "yes" })
     }), localEnv);
   }
 
@@ -97,10 +97,16 @@ describe("CLI Auth Flow", () => {
     expect(row!.api_key_raw).toMatch(/^v1\./);
     expect(row!.api_key_raw).not.toContain("pub_");
 
-    const apiKeyRow = await localEnv.DB.prepare("SELECT name FROM api_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
+    const apiKeyRow = await localEnv.DB.prepare("SELECT name, scopes, project_id, expires_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(user.id)
-      .first<{ name: string }>();
+      .first<{ name: string; scopes: string; project_id: string | null; expires_at: string }>();
     expect(apiKeyRow!.name).toContain("CLI");
+    // 全scope・プロジェクト限定なし・365日固定で発行する
+    expect(JSON.parse(apiKeyRow!.scopes)).toEqual(["read", "write", "deploy"]);
+    expect(apiKeyRow!.project_id).toBeNull();
+    const days = (Date.parse(apiKeyRow!.expires_at) - Date.now()) / 86400000;
+    expect(days).toBeGreaterThan(364);
+    expect(days).toBeLessThanOrEqual(365);
   });
 
   it("redirects CLI callback to login when session is missing", async () => {
