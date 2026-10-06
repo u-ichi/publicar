@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { getUserById } from "../../db/users";
 import type { AppBindings } from "../../env";
+import { requireRecentSession } from "../../middleware/session-security";
 
 export const organizationRoute = new Hono<AppBindings>();
+organizationRoute.use("*", requireRecentSession);
 organizationRoute.use("*", async (c, next) => {
   const admins = (c.env.ORGANIZATION_ADMIN_EMAILS ?? "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean);
   if (!c.env.AUTOMATION_ORGANIZATION_ID || !admins.includes(c.get("user").email.toLowerCase())) {

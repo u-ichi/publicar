@@ -377,7 +377,7 @@ const SPEC = {
 export function openapiSpec(c: Context<AppBindings>): Response {
   const paths = Object.fromEntries(Object.entries(SPEC.paths).map(([path, operations]) => [path,
     Object.fromEntries(Object.entries(operations).map(([method, operation]) => {
-      const sessionOnly = isSessionOnlyOperation(method.toUpperCase(), path.replace(/\{[^}]+\}/g, "id"));
+      const sessionOnly = isSessionOnlyOperation(method.toUpperCase(), path.replace(/\{([^}]+)\}/g, ":$1"));
       const uploads = path === "/api/v1/projects/{id}/deploy" && method === "post";
       const security = sessionOnly ? [{ sessionAuth: [] }] : [{ sessionAuth: [] }, { bearerAuth: [] }, ...(uploads ? [{ uploadKeyAuth: [] }] : [])];
       const detail = "description" in operation ? operation.description + " " : "";

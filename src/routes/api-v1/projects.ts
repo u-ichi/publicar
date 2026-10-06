@@ -28,6 +28,7 @@ import {
 } from "../../db/projects";
 import { getUserByEmail } from "../../db/users";
 import type { AppBindings } from "../../env";
+import { requireRecentSessionIfSession } from "../../middleware/session-security";
 import { withDriveAuthRetry, withProjectDriveAuth } from "../../lib/drive-retry";
 import { getProjectStorage } from "../../storage/service-account-drive";
 import { removeServiceAccountFile, removeServiceAccountProject } from "../../db/storage-mutations";
@@ -95,7 +96,7 @@ projectsRoute.get("/", async (c) => {
   return c.json({ projects: await listProjectsForUser(c.env, c.get("user").id) });
 });
 
-projectsRoute.post("/", async (c) => {
+projectsRoute.post("/", requireRecentSessionIfSession, async (c) => {
   const body = await readJsonObject(c.req.raw);
   if (!body) {
     return c.json({ error: "invalid_json" }, 400);
@@ -149,7 +150,7 @@ projectsRoute.get("/:id", async (c) => {
   return c.json({ project, url: projectUrl(c.req.raw, project.alias) });
 });
 
-projectsRoute.patch("/:id", async (c) => {
+projectsRoute.patch("/:id", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const ownerError = await requireOwner(c, id);
   if (ownerError) {
@@ -265,7 +266,7 @@ projectsRoute.delete("/:id/files", async (c) => {
   } finally { await finishLegacyStorageOperation(c.env, operation); }
 });
 
-projectsRoute.delete("/:id", async (c) => {
+projectsRoute.delete("/:id", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const project = await getProjectForUser(c.env, id, c.get("user").id);
   const role = project?.role ?? null;
@@ -313,7 +314,7 @@ projectsRoute.get("/:id/members", async (c) => {
   return c.json({ members: await listProjectMembers(c.env, id) });
 });
 
-projectsRoute.post("/:id/members", async (c) => {
+projectsRoute.post("/:id/members", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const ownerError = await requireOwner(c, id);
   if (ownerError) {
@@ -340,7 +341,7 @@ projectsRoute.post("/:id/members", async (c) => {
   return c.json({ ok: true, member }, 201);
 });
 
-projectsRoute.patch("/:id/members/:userId", async (c) => {
+projectsRoute.patch("/:id/members/:userId", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const userId = c.req.param("userId");
   const ownerError = await requireOwner(c, id);
@@ -362,7 +363,7 @@ projectsRoute.patch("/:id/members/:userId", async (c) => {
   return c.json({ ok: true, member });
 });
 
-projectsRoute.delete("/:id/members/:userId", async (c) => {
+projectsRoute.delete("/:id/members/:userId", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const userId = c.req.param("userId");
   const ownerError = await requireOwner(c, id);
@@ -389,7 +390,7 @@ projectsRoute.get("/:id/access", async (c) => {
   return c.json({ access: await listProjectAccess(c.env, id) });
 });
 
-projectsRoute.post("/:id/access", async (c) => {
+projectsRoute.post("/:id/access", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const ownerError = await requireOwner(c, id);
   if (ownerError) {
@@ -468,7 +469,7 @@ projectsRoute.post("/:id/access", async (c) => {
   }
 });
 
-projectsRoute.delete("/:id/access/:accessId", async (c) => {
+projectsRoute.delete("/:id/access/:accessId", requireRecentSessionIfSession, async (c) => {
   const id = c.req.param("id");
   const accessId = c.req.param("accessId");
   const ownerError = await requireOwner(c, id);
