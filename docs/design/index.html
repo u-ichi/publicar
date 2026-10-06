@@ -221,7 +221,7 @@
 <h3>共有ドライブのメンバー一覧の取り込み</h3>
 <div class="block-content">
 <ol>
-<li>本番の Cron Triggers（<code>* * * * *</code>）で毎分起動し、<code>drive_member_sync.last_attempt_at</code> から15分経っている時だけ取り込む（<code>syncDriveMembersIfDue</code>）。</li>
+<li>本番の Cron Triggers（<code>*/15 * * * *</code>）で15分ごとに取り込む（<code>syncDriveMembersIfConfigured</code>）。</li>
 <li>サービスアカウントで、共有ドライブの共有一覧を Drive API の <code>permissions.list</code> で取る。</li>
 <li>個人はメールアドレス、ドメインはドメイン名を保存する。Google グループは Cloud Identity Groups API で中の人を取り出し、中のグループも順にたどる。401 で再試行した時は最初から展開し直す。</li>
 <li>結果を <code>drive_member_emails</code> と <code>drive_member_domains</code> に入れ替え、状態を <code>drive_member_sync</code> に残す。</li>
@@ -277,7 +277,7 @@
 <ul>
 <li>アクセス記録（<code>access_logs</code>）は、ログイン中の人が記事を開いた時に残し、<code>ACCESS_LOG_RETENTION_DAYS</code>（既定90日）を過ぎたら消す。</li>
 <li>監査記録（<code>security_events</code>）は、<code>/api/</code> と <code>/auth/cli</code> への要求を、ルーターと同じ復号済みのパスで残す。<code>SECURITY_LOG_RETENTION_DAYS</code>（既定90日）で消す。</li>
-<li>Cron Triggers は、毎分（<code>* * * * *</code>）に途中で止まったアップロードの後片付けとメンバー一覧の取り込みを、毎日（<code>0 3 * * *</code>）に記録の削除を行う。</li>
+<li>Cron Triggers は、毎時（<code>0 * * * *</code>）に途中で止まったアップロードの後片付けを、15分ごと（<code>*/15 * * * *</code>）にメンバー一覧の取り込みを、毎日（<code>0 3 * * *</code>）に記録の削除を行う。後片付けは1回5件までで、Workers Free の1回あたりの subrequest 上限（50回）に収める。</li>
 </ul>
 </div>
 </section>

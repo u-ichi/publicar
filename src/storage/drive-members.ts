@@ -4,7 +4,6 @@ import type { Env } from "../env";
 // 共有ドライブのメンバー一覧を取り込み、プロジェクトの権限の判定（ビュー project_roles）に使う。
 // Google グループは Cloud Identity Groups API で中の人まで展開する。
 const GROUPS_SCOPE = "https://www.googleapis.com/auth/cloud-identity.groups.readonly";
-const SYNC_INTERVAL_MS = 15 * 60000;
 
 type Permission = { type?: string; emailAddress?: string; domain?: string; deleted?: boolean };
 type Membership = { type?: string; preferredMemberKey?: { id?: string } };
@@ -107,11 +106,8 @@ export async function syncDriveMembers(env: Env): Promise<void> {
   }
 }
 
-export async function syncDriveMembersIfDue(env: Env): Promise<void> {
-  if (!serviceAccountConfigured(env)) return;
-  const state = await env.DB.prepare("SELECT last_attempt_at FROM drive_member_sync WHERE id = 1").first<{ last_attempt_at: string | null }>();
-  if (state?.last_attempt_at && Date.now() - Date.parse(state.last_attempt_at) < SYNC_INTERVAL_MS) return;
-  await syncDriveMembers(env);
+export async function syncDriveMembersIfConfigured(env: Env): Promise<void> {
+  if (serviceAccountConfigured(env)) await syncDriveMembers(env);
 }
 
 export async function getDriveMemberSync(env: Env): Promise<DriveMemberSync | null> {
