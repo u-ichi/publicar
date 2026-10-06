@@ -2,6 +2,7 @@ import { listProjectsForUser, type Project } from "../../db/projects";
 import type { AppBindings, AuthUser } from "../../env";
 import type { Context } from "hono";
 import { escapeHtml, firstAllowedDomain, googleIcon, iconGrid, iconList, loginPage, page, roleBadge, shell, visibilityBadge, visibilityOptions } from "./layout";
+import { isDriveMemberUser } from "../../storage/drive-members";
 
 function projectCard(project: Project): string {
   return `<article class="card project-card" data-project-title="${escapeHtml(project.title.toLowerCase())}" data-project-alias="${escapeHtml(project.alias.toLowerCase())}">
@@ -37,8 +38,9 @@ function projectListRows(projects: Project[]): string {
     .join("");
 }
 
-function dashboard(user: AuthUser, projects: Project[]): string {
-  const isGuest = user.kind === "guest";
+// プロジェクトを作れるのは共有ドライブのメンバーだけ（canCreate）
+function dashboard(user: AuthUser, projects: Project[], canCreate: boolean): string {
+  const isGuest = !canCreate;
   const createControls = isGuest
     ? ""
     : `<button class="button" type="button" data-open-modal="#new-project-dialog">+ 新規プロジェクト</button>`;
@@ -121,6 +123,6 @@ export async function home(c: Context<AppBindings>): Promise<Response> {
     return c.html(loginPage(firstAllowedDomain(c)));
   }
   const projects = await listProjectsForUser(c.env, user.id);
-  return c.html(page("publicar", dashboard(user, projects)));
+  return c.html(page("publicar", dashboard(user, projects, await isDriveMemberUser(c.env, user.id))));
 }
 

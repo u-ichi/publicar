@@ -89,7 +89,7 @@ function externalAccessSection(project: Project, accessList: ProjectAccess[]): s
   }
   return `<div class="stack" style="margin-top:24px">
     <h2>外部コラボレーター招待</h2>
-    <p class="subtle">組織の利用者に加えて、ここに追加したメールアドレスの Google アカウントがこの project を閲覧・コメントできます。組織ドメイン外のアドレスも指定できます。Drive フォルダがある場合、選択した権限で共有も連動します (通知メールは送りません)。</p>
+    <p class="subtle">共有ドライブのメンバーに加えて、ここに追加したメールアドレスの Google アカウントがこの project を閲覧・コメントできます。組織ドメイン外のアドレスも指定できます。Drive フォルダがある場合、選択した権限で共有も連動します (通知メールは送りません)。</p>
     <form id="access-form" class="row">
       <label>メールアドレス<input name="email" type="email" required placeholder="guest@example.com"></label>
       <label>Drive 権限

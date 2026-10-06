@@ -130,6 +130,9 @@ export async function resetDatabase(localEnv: Env): Promise<void> {
   await localEnv.DB.prepare("DELETE FROM project_files").run();
   await localEnv.DB.prepare("DELETE FROM project_access").run();
   await localEnv.DB.prepare("DELETE FROM project_members").run();
+  await localEnv.DB.prepare("DELETE FROM drive_member_emails").run();
+  await localEnv.DB.prepare("DELETE FROM drive_member_domains").run();
+  await localEnv.DB.prepare("DELETE FROM drive_member_sync").run();
   await localEnv.DB.prepare("DELETE FROM projects").run();
   await localEnv.DB.prepare("DELETE FROM users").run();
   await localEnv.DB.prepare("DELETE FROM oauth_states").run();

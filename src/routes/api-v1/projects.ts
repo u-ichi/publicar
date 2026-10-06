@@ -45,6 +45,7 @@ import {
 } from "../../storage/drive";
 import { driveDeleteFailureResponse } from "./drive-errors";
 import { requireOwner } from "./guards";
+import { isDriveMemberUser } from "../../storage/drive-members";
 
 /** Drive 失敗理由を UI / API 向けの短文にする */
 function driveErrorMessage(error: unknown, action: "grant" | "revoke"): string {
@@ -97,6 +98,8 @@ projectsRoute.get("/", async (c) => {
 });
 
 projectsRoute.post("/", async (c) => {
+  // プロジェクトを作れるのは共有ドライブのメンバーだけ。作成後の読み直しで失敗して行が残らないよう、先に判定する
+  if (!(await isDriveMemberUser(c.env, c.get("user").id))) return c.json({ error: "drive_member_required" }, 403);
   const body = await readJsonObject(c.req.raw);
   if (!body) {
     return c.json({ error: "invalid_json" }, 400);

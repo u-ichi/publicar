@@ -495,10 +495,10 @@ export function loginPage(domain: string): string {
   );
 }
 
-// 閲覧の可否は共有ドライブと同じ規則で決まるため、画面で選べるのは組織内・リンク・公開の3つだけにする。
-// 以前の private / invite / group は組織内として扱う。
+// 閲覧の可否は共有ドライブのメンバーで決まるため、画面で選べるのはメンバー・リンク・公開の3つだけにする。
+// 以前の private / invite / group はメンバーとして扱う。
 const VISIBILITY_CHOICES = [
-  { value: "domain", label: "組織内" },
+  { value: "domain", label: "共有ドライブのメンバー" },
   { value: "link", label: "リンクを知っている人" },
   { value: "public", label: "公開" }
 ] as const;

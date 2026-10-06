@@ -111,12 +111,20 @@ export async function createCommentNotification(
   ]);
 }
 
+// 受け取る人が今そのプロジェクトを見られる通知だけを返す（共有ドライブから外れた人に本文を見せない）
+const VIEWABLE_NOTIFICATION = `(
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = ne.project_id AND p.visibility IN ('link', 'public'))
+  OR EXISTS (SELECT 1 FROM project_roles r WHERE r.project_id = ne.project_id AND r.user_id = nd.recipient_user_id)
+  OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = ne.project_id AND (a.user_id = nd.recipient_user_id
+    OR (a.user_id IS NULL AND lower(a.email) = (SELECT lower(email) FROM users WHERE id = nd.recipient_user_id))))
+)`;
+
 export async function listNotifications(
   env: Env,
   userId: string,
   opts: { status?: "unread" | "all"; limit: number; cursor?: string }
 ): Promise<{ notifications: NotificationItem[]; unreadCount: number; nextCursor: string | null }> {
-  const conditions = ["nd.recipient_user_id = ?", "nd.channel = 'app'"];
+  const conditions = ["nd.recipient_user_id = ?", "nd.channel = 'app'", VIEWABLE_NOTIFICATION];
   const params: unknown[] = [userId];
   if ((opts.status ?? "unread") === "unread") {
     conditions.push("nd.read_at IS NULL");
@@ -141,7 +149,8 @@ export async function listNotifications(
       .bind(...params, limit + 1)
       .all<NotificationRow>(),
     env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM notification_deliveries WHERE recipient_user_id = ? AND channel = 'app' AND read_at IS NULL"
+      `SELECT COUNT(*) AS count FROM notification_deliveries nd JOIN notification_events ne ON ne.id = nd.event_id
+       WHERE nd.recipient_user_id = ? AND nd.channel = 'app' AND nd.read_at IS NULL AND ${VIEWABLE_NOTIFICATION}`
     )
       .bind(userId)
       .first<{ count: number }>()

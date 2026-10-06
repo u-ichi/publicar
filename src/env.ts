@@ -18,6 +18,7 @@ export type Env = {
   GOOGLE_JWKS_URL?: string;
   GOOGLE_USERINFO_URL?: string;
   GOOGLE_DRIVE_API_BASE_URL?: string;
+  CLOUD_IDENTITY_API_BASE_URL?: string;
   GOOGLE_DRIVE_UPLOAD_BASE_URL?: string;
   TEAM_DRIVE_ID?: string;
   DEFAULT_VISIBILITY?: string;
