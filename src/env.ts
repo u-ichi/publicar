@@ -50,9 +50,7 @@ export type AppVariables = {
   auditedUploadKeyId?: string;
   driveServiceAccount?: string;
   legacyDeploy?: { id: string; deadline: number };
-  apiKeyScopes?: string[];
   apiKeyId?: string;
-  apiKeyProjectId?: string | null;
 };
 
 export type AppBindings = {

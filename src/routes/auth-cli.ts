@@ -9,9 +9,6 @@ import {
 } from "../db/cli-auth";
 import type { AppBindings } from "../env";
 
-// CLIへ渡すキーは全scope・プロジェクト限定なしで発行し、期限だけを固定する
-const CLI_KEY_DAYS = 365;
-
 export const cliAuthRoute = new Hono<AppBindings>();
 
 cliAuthRoute.get("/cli", async (c) => {
@@ -53,8 +50,7 @@ cliAuthRoute.get("/cli/callback", async (c) => {
     WHERE state = ? AND status = 'pending' AND expires_at > ?`)
     .bind(cliState, Math.floor(Date.now() / 1000)).run();
   if (!claimed.meta.changes) return c.html(errorHtml("認証リンクの有効期限が切れました。CLI から再度実行してください。"), 410);
-  const { rawKey, apiKey } = await createApiKey(c.env, user.id, { name: "CLI", scopes: ["read", "write", "deploy"],
-    projectId: null, expiresAt: new Date(Date.now() + CLI_KEY_DAYS * 86400000).toISOString() });
+  const { rawKey, apiKey } = await createApiKey(c.env, user.id, { name: "CLI" });
   c.set("apiKeyId", apiKey.id);
   try {
     if (!(await completeCliAuthState(c.env, cliState, rawKey, apiKey.id))) {

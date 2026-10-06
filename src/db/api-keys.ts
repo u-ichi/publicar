@@ -5,6 +5,8 @@ import { randomId } from "../lib/id";
 
 const VALID_SCOPES = ["read", "write", "deploy"] as const;
 export type Scope = (typeof VALID_SCOPES)[number];
+// APIキーは本人として扱うため、全scope・プロジェクト限定なしで発行する
+export const API_KEY_MAX_DAYS = 365;
 
 // UTCの実在する日時だけを受け付け、日付の自動繰り上がりを拒否する。
 export function expirationTime(value: unknown): number {
@@ -58,18 +60,6 @@ function rowToApiKey(row: ApiKeyRow): ApiKey {
   };
 }
 
-export function validateScopes(input: unknown): Scope[] | null {
-  if (!Array.isArray(input) || input.length === 0) {
-    return null;
-  }
-  for (const value of input) {
-    if (!VALID_SCOPES.includes(value as Scope)) {
-      return null;
-    }
-  }
-  return input as Scope[];
-}
-
 async function generateApiKey(): Promise<{ raw: string; prefix: string; hash: string }> {
   const raw = `pub_${randomBase64Url(32)}`;
   return {
@@ -82,7 +72,7 @@ async function generateApiKey(): Promise<{ raw: string; prefix: string; hash: st
 export async function createApiKey(
   env: Env,
   userId: string,
-  opts: { name: string; scopes?: Scope[]; expiresAt?: string | null; projectId?: string | null; automationGrantId?: string | null }
+  opts: { name: string; expiresAt?: string | null; automationGrantId?: string | null }
 ): Promise<{ apiKey: ApiKey; rawKey: string }> {
   const { raw, prefix, hash } = await generateApiKey();
   const row = await env.DB.prepare(
@@ -90,7 +80,7 @@ export async function createApiKey(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING *`
   )
-    .bind(randomId("ak"), userId, opts.name, hash, prefix, JSON.stringify(opts.scopes ?? ["read"]), opts.expiresAt ?? new Date(Date.now() + 30 * 86400000).toISOString(), opts.projectId ?? null, opts.automationGrantId ?? null)
+    .bind(randomId("ak"), userId, opts.name, hash, prefix, JSON.stringify(VALID_SCOPES), opts.expiresAt ?? new Date(Date.now() + API_KEY_MAX_DAYS * 86400000).toISOString(), null, opts.automationGrantId ?? null)
     .first<ApiKeyRow>();
 
   if (!row) {

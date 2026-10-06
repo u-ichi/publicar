@@ -11,7 +11,7 @@ API キーを Authorization ヘッダーで送信する。
 
     Authorization: Bearer pub_...
 
-API キーは Web UI のダッシュボードから発行するか、セッション認証済みの状態で POST /api/v1/api-keys を呼ぶ。
+API キーは CLI の認証（/auth/cli）で発行するか、ログインしたセッションで POST /api/v1/api-keys を呼ぶ。キーはログインした本人と同じ操作ができる（キーの発行と組織管理を除く）。
 
 ## クイックスタート
 

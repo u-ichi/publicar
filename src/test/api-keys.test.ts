@@ -40,11 +40,12 @@ describe("publicar worker", () => {
     expect(json.raw_key).toMatch(/^pub_/);
     expect(json.api_key.name).toBe("test-key");
     expect(json.api_key.keyPrefix).toMatch(/^pub_/);
-    expect(json.api_key.scopes).toEqual(["read"]);
+    // キーは本人として扱うため、常に全scopeで発行する
+    expect(json.api_key.scopes).toEqual(["read", "write", "deploy"]);
     expect(json.api_key).not.toHaveProperty("keyHash");
   });
 
-  it("creates API keys with custom scopes", async () => {
+  it("rejects scope or project restrictions on API key create requests", async () => {
     const localEnv = testEnv();
     const cookie = await authCookie(localEnv);
 
@@ -60,9 +61,8 @@ describe("publicar worker", () => {
       localEnv
     );
 
-    expect(response.status).toBe(201);
-    const json = (await response.json()) as { api_key: { scopes: string[] } };
-    expect(json.api_key.scopes).toEqual(["read"]);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "api_key_restrictions_unsupported" });
   });
 
   it("rejects invalid API key create requests", async () => {
@@ -206,11 +206,8 @@ describe("publicar worker", () => {
     expect(response.status).toBe(401);
   });
 
-  async function createTestApiKey(localEnv: Env, cookie: string, name: string, scopes?: string[], projectId?: string): Promise<string> {
-    const body: { name: string; scopes?: string[]; project_id?: string } = { name, project_id: projectId };
-    if (scopes) {
-      body.scopes = scopes;
-    }
+  async function createTestApiKey(localEnv: Env, cookie: string, name: string): Promise<string> {
+    const body = { name };
     const response = await app.fetch(
       new Request("http://localhost/api/v1/api-keys", {
         method: "POST",
@@ -229,8 +226,7 @@ describe("publicar worker", () => {
   it("lets an API key list and revoke the user's own keys but not create keys", async () => {
     const localEnv = testEnv();
     const cookie = await authCookie(localEnv);
-    // CLI認証で発行されるキーと同じ、全scope・プロジェクト限定なしのキー
-    const { rawKey } = await createApiKey(localEnv, user.id, { name: "CLI", scopes: ["read", "write", "deploy"] });
+    const { rawKey } = await createApiKey(localEnv, user.id, { name: "CLI" });
     await createTestApiKey(localEnv, cookie, "old-key");
     const auth = { Authorization: `Bearer ${rawKey}` };
 
@@ -248,18 +244,6 @@ describe("publicar worker", () => {
       method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ name: "escalated" })
     }), localEnv);
     expect(createResponse.status).toBe(403);
-  });
-
-  it("requires write scope to revoke keys with an API key", async () => {
-    const localEnv = testEnv();
-    const cookie = await authCookie(localEnv);
-    const readKey = await createTestApiKey(localEnv, cookie, "read-key", ["read"]);
-    const list = (await (await app.fetch(new Request("http://localhost/api/v1/api-keys", { headers: { Authorization: `Bearer ${readKey}` } }), localEnv)).json()) as { api_keys: { id: string }[] };
-
-    const response = await app.fetch(new Request(`http://localhost/api/v1/api-keys/${list.api_keys[0].id}`, {
-      method: "DELETE", headers: { Authorization: `Bearer ${readKey}` }
-    }), localEnv);
-    expect(response.status).toBe(403);
   });
 
   it("authenticates API requests with an API key", async () => {
@@ -361,35 +345,7 @@ describe("publicar worker", () => {
     expect(key?.lastUsedAt).not.toBeNull();
   });
 
-  it("rejects API key deploys without the deploy scope", async () => {
-    const localEnv = testEnv();
-    const cookie = await authCookie(localEnv);
-    const rawKey = await createTestApiKey(localEnv, cookie, "read-only-deploy", ["read"]);
-    const project = await createProject(localEnv, user, {
-      title: "Scope Reject",
-      alias: "scope-reject",
-      visibility: "public"
-    });
-    const fetchMock = mockDriveUploads();
-
-    const response = await app.fetch(
-      new Request(`http://localhost/api/v1/projects/${project.id}/deploy?path=index.html`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${rawKey}`,
-          "Content-Type": "text/html"
-        },
-        body: "<h1>Blocked</h1>"
-      }),
-      localEnv
-    );
-
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual({ error: "insufficient_scope", required: "deploy" });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("allows API key deploys with the deploy scope", async () => {
+  it("allows API key deploys", async () => {
     const localEnv = testEnv();
     const cookie = await authCookie(localEnv);
     const project = await createProject(localEnv, user, {
@@ -397,7 +353,7 @@ describe("publicar worker", () => {
       alias: "scope-deploy",
       visibility: "public"
     });
-    const rawKey = await createTestApiKey(localEnv, cookie, "deploy-scope", ["deploy"], project.id);
+    const rawKey = await createTestApiKey(localEnv, cookie, "deploy-key");
     const fetchMock = mockDriveUploads();
 
     const response = await app.fetch(
