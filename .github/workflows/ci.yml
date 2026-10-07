@@ -33,6 +33,13 @@ jobs:
           [ -f wrangler.toml ] || cp wrangler.toml.example wrangler.toml
           [ -f .dev.vars ] || cp .dev.vars.example .dev.vars
 
+      - name: Lint migrations
+        run: node scripts/lint-migrations.mjs
+
+      # 本番の配備と同じコマンドで、すべてのマイグレーションを手元の D1 に適用する
+      - name: Apply migrations as in production
+        run: npx wrangler d1 migrations apply DB --local
+
       - name: Typecheck
         run: npm run typecheck
 
