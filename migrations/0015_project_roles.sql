@@ -34,4 +34,4 @@ WHERE u.kind = 'member' AND u.disabled_at IS NULL AND (
 CREATE VIEW project_roles AS
 SELECT p.id AS project_id, m.user_id AS user_id, 'owner' AS role
 FROM projects p
-CROSS JOIN drive_member_users m
+CROSS JOIN drive_member_users m;
